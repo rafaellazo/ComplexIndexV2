@@ -1,92 +1,90 @@
+{% load static i18n %}
 <!DOCTYPE html>
-<html lang="es">
+<html lang="{{ LANGUAGE_CODE|default:'es' }}" class="h-full">
 
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Enterprise Lex Index{% endblock %}</title>
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-    {% block custom_css %} 
-    <style>
-    body {
-        font-family: 'Poppins', sans-serif;
-    }
-    </style>
-    {% endblock %}
+
+    <!-- Pre-render síncrono para eliminar parpadeo FOUC (Tema Oscuro y Barra Colapsada) -->
+    <script>
+        (function () {
+            // Bloquear transiciones CSS durante la carga inicial para evitar deslizamiento y parpadeo
+            document.documentElement.classList.add('preload-transitions');
+
+            const savedTheme = localStorage.getItem('eli_theme');
+            if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                document.documentElement.classList.add('dark');
+            } else {
+                document.documentElement.classList.remove('dark');
+            }
+
+            if (localStorage.getItem('eli_sidebar_collapsed') === 'true' || window.location.search.includes('test_collapsed=1')) {
+                document.documentElement.classList.add('sidebar-collapsed');
+            }
+            if (localStorage.getItem('eli_sidebar_hidden') === 'true') {
+                document.documentElement.classList.add('sidebar-hidden');
+            }
+        })();
+    </script>
+
+    <!-- Favicon & Touch Icons -->
+    <link rel="icon" type="image/svg+xml" href="{% static 'images/favicon.svg' %}">
+    <link rel="alternate icon" type="image/x-icon" href="{% static 'images/favicon.ico' %}">
+    <link rel="apple-touch-icon" href="{% static 'images/favicon-apple.png' %}">
+
+    <!-- Google Fonts: Manrope (Tipografía Institucional ELI) & IBM Plex Mono (Métricas Tabulares) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+    <!-- Tailwind CSS 3 (Estilos Estáticos Precompilados AOT - Cero FOUC) -->
+    <link rel="stylesheet" href="{% static 'css/tailwind.min.css' %}?v=eli-50">
+    <!-- Shell ELI: rail, header, drawer, tema y microinteracciones -->
+    <link rel="stylesheet" href="{% static 'css/shell.css' %}?v=eli-51">
+
+    {% block custom_css %}{% endblock %}
+    <script type="text/javascript" src="{% url 'javascript-catalog' %}" defer></script>
 </head>
 
-<body class="bg-gray-100 text-gray-900 flex flex-col min-h-screen">
+<body class="{% block body_class %}{% endblock %} h-full text-slate-900 flex flex-col antialiased">
 
-    <!-- !Navegación -->
-    <nav class="bg-white shadow-md border-b border-gray-200">
-      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div class="flex flex-col md:flex-row md:items-center md:justify-between py-4 space-y-4 md:space-y-0">
-        
-          <!-- Logo + Bienvenida -->
-          <div class="flex flex-col sm:flex-row sm:items-center sm:space-x-4 text-center sm:text-left">
-            <a href="{% url 'index' %}" class="text-3xl font-extrabold text-blue-600">ELI</a>
-            {% if user.is_authenticated %}
-            <span class="text-gray-700 font-medium text-sm sm:text-base">
-              ¡Bienvenido, <span class="font-bold text-blue-600">{{ user.username }}</span>!
-            </span>
+    <!-- El shell de la aplicación (sidebar + canvas) puede ser reemplazado por
+         plantillas con carcasa propia (p. ej. la landing pública). -->
+    {% block app_shell %}
+    {% include "partials/_sidebar.html" %}
+
+    <!-- ========================================================================= -->
+    <!-- CANVAS PRINCIPAL DE TRABAJO (Main Workspace Canvas)                        -->
+    <!-- ========================================================================= -->
+    <div id="mainCanvasArea" class="main-canvas-area lg:pl-64 xl:pl-72 flex-1 flex flex-col min-w-0 min-h-screen">
+
+        {% include "partials/_topbar.html" %}
+
+        <main class="flex-1 w-full min-w-0 flex flex-col">
+            {% if messages %}
+            <div class="mx-auto w-full max-w-[1440px] px-5 pt-4 sm:px-7 lg:px-9">
+                {% include "partials/_messages.html" %}
+            </div>
             {% endif %}
-          </div>
-        
-          <!-- Menú -->
-          <ul class="flex flex-col md:flex-row md:items-center md:space-x-6 space-y-4 md:space-y-0 text-center md:text-left">
-            {% if user.is_authenticated %}
-            <li>
-              <a href="{% url 'panel' %}" class="text-gray-700 hover:text-blue-600 font-medium transition">
-                Panel de administración
-              </a>
-            </li>
-            <li>
-              <a href="{% url 'profile' %}" class="flex justify-center md:justify-start items-center">
-                {% if user.profile.picture %}
-                <img src="{{ user.profile.picture.url }}" alt="Foto de perfil" class="w-10 h-10 rounded-full object-cover border-2 border-blue-500 shadow-sm">
-                {% else %}
-                <div class="w-10 h-10 rounded-full bg-gray-300 flex items-center justify-center text-gray-600 shadow-inner">
-                  <span class="text-base">👤</span>
-                </div>
-                {% endif %}
-              </a>
-            </li>
-            <li>
-              <form action="{% url 'logout' %}" method="post">
-                {% csrf_token %}
-                <button type="submit" class="text-red-600 hover:underline font-medium transition">
-                  Cerrar sesión
-                </button>
-              </form>
-            </li>
-            {% else %}
-            <li>
-              <a href="{% url 'login' %}" class="text-gray-700 hover:text-blue-600 font-medium transition">
-                Iniciar sesión
-              </a>
-            </li>
-            <li>
-              <a href="{% url 'register' %}" class="text-gray-700 hover:text-blue-600 font-medium transition">
-                Registrarse
-              </a>
-            </li>
-            {% endif %}
-          </ul>
-        </div>
-      </div>
-    </nav>
+            {% block content %}{% endblock %}
+        </main>
 
-    <!-- !Contenido principal -->
-    <main class="container mx-auto py-8 flex-grow">
-        {% block content %}{% endblock %}
-    </main>
+        {% block footer %}
+        {% include "partials/_footer.html" %}
+        {% endblock %}
 
-    <!-- !Footer -->
-    <footer class="bg-gray-200 text-center py-4">
-        © 2025 Enterprise Lex Index. Todos los derechos reservados.
-    </footer>
+    </div>
+    {% endblock %}
 
+    <!-- ========================================================================= -->
+    <!-- SCRIPTS DE CONTROL DEL SHELL                                               -->
+    <!-- ========================================================================= -->
+    <script src="{% static 'js/shell.js' %}?v=eli-35"></script>
+    <script src="{% static 'js/custom_select.js' %}?v=eli-17"></script>
     {% block scripts %}
     {% endblock %}
-  </body>
+</body>
+
 </html>

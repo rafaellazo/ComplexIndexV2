@@ -6,15 +6,26 @@ urlpatterns = [
     path("", views.index_view, name="index"),
     path("panel/", views.panel_view, name="panel"),
     path("upload/", views.upload_view, name="upload"),
+    path("upload/zip/prepare/", views.prepare_zip_batch_view, name="prepare_zip_batch"),
+    path("upload/zip/process-item/", views.process_zip_item_view, name="process_zip_item"),
+    path("upload/zip/finish/", views.finish_zip_batch_view, name="finish_zip_batch"),
     path("comparative_analysis/", views.comparative_analysis_view, name="comparative_analysis"),
     path("users/", views.user_view, name="users"),
+    path("users/create/", views.create_user, name="users_create"),
+    path("users/update/", views.update_user, name="users_update"),
+    path("users/<int:user_id>/toggle-active/", views.toggle_user_active, name="users_toggle_active"),
+    path("users/<int:user_id>/expert/", views.assign_expert, name="users_assign_expert"),
+    path("users/<int:user_id>/delete/", views.delete_user, name="users_delete"),
+    path("users/audit-logs/", views.user_audit_logs, name="users_audit_logs"),
     path("reports-by-year/", views.reports_by_year, name="reports_by_year"),
+    path("reports-by-company/", views.reports_by_company, name="reports_by_company"),
     
     # Included URLConfs
+    path("reports/", include("Counter.other.urls_report")),
     path("totalcount/", include("Counter.other.urls_total_count")),
     path("companies/", include("Counter.other.urls_company")),
-    path("reports/", include("Counter.other.urls_report")),
     path("expert_lists/", include("Counter.other.urls_expert_lists")),
     path("concealment_detection/", include("Counter.other.urls_concealment_detection")),
+    path("workspaces/", include("Counter.other.urls_workspace")),
 ]
 

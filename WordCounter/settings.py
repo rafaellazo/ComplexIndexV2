@@ -1,3 +1,4 @@
+from django.utils.translation import gettext_lazy as _
 """
 Django settings for WordCounter project.
 
@@ -47,12 +48,28 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.middleware.locale.LocaleMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
+    'Counter.middleware.WorkspaceAccessGuardMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+
+# Denegar por defecto: fuera de estas rutas, un usuario sin espacio de trabajo
+# activo es redirigido a /workspaces/ y no llega a ninguna vista con datos.
+# (Nunca incluir "/" aquí: sería prefijo de todas las rutas y desactivaría el guard.)
+WORKSPACE_PUBLIC_PATHS = (
+    '/workspaces/',
+    '/Auth/',
+    '/admin/',
+    '/i18n/',
+    '/jsi18n/',
+    '/static/',
+    '/media/',
+    '/favicon.ico',
+)
 
 ROOT_URLCONF = 'WordCounter.urls'
 
@@ -64,8 +81,10 @@ TEMPLATES = [
         'OPTIONS': {
             'context_processors': [
                 'django.template.context_processors.request',
+                'django.template.context_processors.i18n',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'Counter.context_processors.workspace_context',
             ],
         },
     },
@@ -109,12 +128,17 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'es'
 USE_I18N = True
-
+USE_TZ = True
 TIME_ZONE = 'UTC'
 
-USE_I18N = True
+LANGUAGES = [
+    ('es', _('Español')),
+    ('en', _('English')),
+]
 
-USE_TZ = True
+LOCALE_PATHS = [
+    BASE_DIR / 'locale',
+]
 
 
 # Static files (CSS, JavaScript, Images)
@@ -137,7 +161,7 @@ LOGIN_URL = 'login'
 LOGIN_REDIRECT_URL = '/'
 
 # (opcional) A dónde redirige después de cerrar sesión
-LOGOUT_REDIRECT_URL = 'login'
+LOGOUT_REDIRECT_URL = 'index'
 
 MEDIA_ROOT = BASE_DIR / 'media'
 

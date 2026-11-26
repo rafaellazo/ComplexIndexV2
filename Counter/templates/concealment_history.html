@@ -1,0 +1,367 @@
+{% extends "base.html" %}
+{% load i18n static %}
+
+{% block title %}{% trans "Historial de Auditoría de Ocultamiento" %} | ELI{% endblock %}
+{% block body_class %}eli-theme{% endblock %}
+
+{% block content %}
+<div class="mx-auto w-full max-w-[1800px] px-5 py-7 sm:px-7 lg:px-9">
+
+    <!-- ===================================================================== -->
+    <!-- Cabecera: trazabilidad de revisiones                                  -->
+    <!-- ===================================================================== -->
+    <header class="flex flex-col gap-5 border-b border-[var(--line)] pb-6 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+            <div class="flex flex-wrap items-center gap-2 text-[10px] font-semibold text-[var(--muted)]">
+                <a href="{% url 'panel' %}" class="inline-flex items-center gap-1.5 transition hover:text-[var(--blue)]">
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+                    </svg>
+                    <span>{% trans "Observatorio" %}</span>
+                </a>
+                <span class="text-[var(--faint)]">/</span>
+                <a href="{% url 'concealment_detection' %}" class="transition hover:text-[var(--blue)]">{% trans "Detección de ocultamiento" %}</a>
+                <span class="text-[var(--faint)]">/</span>
+                <span class="text-[var(--ink)]">{% trans "Historial" %}</span>
+            </div>
+
+            <div class="mt-5 flex flex-wrap items-center gap-3">
+                <p class="eyebrow">{% trans "Trazabilidad" %}</p>
+                <span class="inline-flex items-center rounded-full border border-[var(--line)] bg-[var(--blue-soft)] px-2.5 py-1 font-mono text-[9px] font-semibold text-[var(--blue)]">
+                    {% trans "Auditoría" %}
+                </span>
+            </div>
+
+            <h1 class="mt-2 text-3xl font-semibold tracking-[-0.045em] text-[var(--ink)] sm:text-4xl">
+                {% trans "Historial de Auditoría de Ocultamiento" %}
+            </h1>
+            <p class="mt-3 max-w-2xl text-xs leading-6 text-[var(--muted)]">
+                {% trans "Trazabilidad de revisiones efectuadas, auditores responsables y párrafos analizados." %}
+            </p>
+        </div>
+
+        <a href="{% url 'concealment_detection' %}" class="secondary-action inline-flex items-center gap-2 self-start lg:self-end">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+            </svg>
+            {% trans "Volver a detección" %}
+        </a>
+    </header>
+
+    <!-- ===================================================================== -->
+    <!-- Lectura rápida del historial (KPI cards)                              -->
+    <!-- ===================================================================== -->
+    <div class="mt-6 grid gap-3.5 sm:grid-cols-3">
+        <div class="surface-panel flex items-center justify-between p-4">
+            <div>
+                <span class="block text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--muted)]">{% trans "Revisiones encontradas" %}</span>
+                <span class="mt-1 block font-mono text-2xl font-bold tabular-nums text-[var(--ink)]">{{ total_reviews_count }}</span>
+            </div>
+            <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--blue-soft)] text-[var(--blue)]">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+                </svg>
+            </span>
+        </div>
+
+        <div class="surface-panel flex items-center justify-between p-4">
+            <div>
+                <span class="block text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--muted)]">{% trans "Ocurrencias validadas" %}</span>
+                <span class="mt-1 block font-mono text-2xl font-bold tabular-nums text-[var(--teal)]">{{ total_words_validated }}</span>
+            </div>
+            <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--teal-soft)] text-[var(--teal)]">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+            </span>
+        </div>
+
+        <div class="surface-panel flex items-center justify-between p-4">
+            <div>
+                <span class="block text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--muted)]">{% trans "Ocurrencias descartadas" %}</span>
+                <span class="mt-1 block font-mono text-2xl font-bold tabular-nums text-[var(--red)]">{{ total_words_discarded }}</span>
+            </div>
+            <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--red-soft)] text-[var(--red)]">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </span>
+        </div>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- Filtros: año, empresa, auditor y palabra                              -->
+    <!-- ===================================================================== -->
+    <form id="filterForm" method="get" class="filter-strip mt-6">
+        <div class="flex flex-wrap gap-3 w-full">
+            <div class="form-field min-w-[160px] flex-1">
+                <span>{% trans "Año del reporte" %}</span>
+                <select name="year" id="year" data-custom-select="true" class="eli-input">
+                    <option value="">{% trans "Todos los años" %}</option>
+                    {% for y in years %}
+                    <option value="{{ y }}" {% if year_filter == y|stringformat:"s" %}selected{% endif %}>{{ y }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-field min-w-[200px] flex-[1.3]">
+                <span>{% trans "Empresa" %}</span>
+                <select name="company" id="company" data-custom-select="true" class="eli-input">
+                    <option value="">{% trans "Todas las empresas" %}</option>
+                    {% for c in companies %}
+                    <option value="{{ c.id }}" {% if company_filter == c.id|stringformat:"s" or company_filter == c.name or company_filter == c.clean_name %}selected{% endif %}>
+                        {{ c.clean_name|default:c.name }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-field min-w-[160px] flex-1">
+                <span>{% trans "Auditor" %}</span>
+                <select name="user" id="user" data-custom-select="true" class="eli-input">
+                    <option value="">{% trans "Todos los auditores" %}</option>
+                    {% for a in auditors %}
+                    <option value="{{ a.username }}" {% if user_filter == a.username %}selected{% endif %}>
+                        {{ a.username }}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <div class="form-field min-w-[200px] flex-[1.4]">
+                <span>{% trans "Palabra auditada" %}</span>
+                <div class="relative">
+                    <span class="pointer-events-none absolute inset-y-0 left-3 flex items-center text-[var(--faint)]">
+                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                        </svg>
+                    </span>
+                    <input type="text"
+                           name="word"
+                           id="word"
+                           value="{{ word_filter }}"
+                           placeholder="{% trans 'Buscar palabra...' %}"
+                           class="eli-input !pl-9">
+                </div>
+            </div>
+        </div>
+
+        <div class="mt-4 flex flex-col-reverse gap-2 border-t border-[var(--line)] pt-4 sm:flex-row sm:items-center sm:justify-end w-full">
+            {% if year_filter or company_filter or user_filter or word_filter %}
+            <a href="{% url 'concealment_history' %}" class="dialog-cancel w-full gap-1.5 sm:w-auto">
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+                {% trans "Limpiar filtros" %}
+            </a>
+            {% endif %}
+            <button type="submit" class="dialog-confirm w-full gap-2 sm:w-auto">
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/>
+                </svg>
+                {% trans "Filtrar" %}
+            </button>
+        </div>
+    </form>
+
+    <!-- ===================================================================== -->
+    <!-- Tabla de auditorías                                                   -->
+    <!-- ===================================================================== -->
+    <section class="surface-panel mt-5">
+        <div class="overflow-x-auto">
+            <table class="data-table min-w-[1000px]">
+                <thead>
+                    <tr>
+                        <th class="text-[10px] font-bold uppercase tracking-wider">{% trans "Fecha y hora" %}</th>
+                        <th class="text-[10px] font-bold uppercase tracking-wider">{% trans "Auditor" %}</th>
+                        <th class="text-[10px] font-bold uppercase tracking-wider">{% trans "Empresa / año" %}</th>
+                        <th class="text-[10px] font-bold uppercase tracking-wider">{% trans "Palabra" %}</th>
+                        <th class="text-center text-[10px] font-bold uppercase tracking-wider">{% trans "Detectadas" %}</th>
+                        <th class="text-center text-[10px] font-bold uppercase tracking-wider">{% trans "Válidas" %}</th>
+                        <th class="text-center text-[10px] font-bold uppercase tracking-wider">{% trans "Descartadas" %}</th>
+                        <th class="text-right text-[10px] font-bold uppercase tracking-wider">{% trans "Detalle" %}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in reviews %}
+                    <tr class="transition-colors hover:bg-[var(--surface-hover)]">
+                        <td class="whitespace-nowrap font-mono text-[10px] tabular-nums text-[var(--muted)]">
+                            {{ r.reviewed_at|date:"d/m/Y H:i" }}
+                        </td>
+                        <td class="whitespace-nowrap">
+                            {% if r.user %}
+                            <span class="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--blue-soft)] px-2.5 py-0.5 font-mono text-[9px] font-semibold text-[var(--blue)]">
+                                <svg class="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
+                                    <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/>
+                                </svg>
+                                {{ r.user.username }}
+                            </span>
+                            {% else %}
+                            <span class="text-[10px] italic text-[var(--faint)]">{% trans "Sin registrar" %}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if r.report and r.report.company %}
+                                <span class="text-[11px] font-semibold text-[var(--ink)]">{{ r.clean_company|default:r.report.company.name }}</span>
+                                {% if r.report.year %}
+                                <span class="period-chip ml-2">{{ r.report.year }}</span>
+                                {% endif %}
+                            {% else %}
+                                <span class="text-[11px] font-semibold text-[var(--ink)]">{{ r.report.name|default:"Reporte" }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-[11px] font-semibold text-[var(--blue)]">"{{ r.word }}"</td>
+                        <td class="text-center font-mono text-[11px] font-semibold tabular-nums text-[var(--ink)]">{{ r.total_found }}</td>
+                        <td class="text-center"><span class="metric-badge low text-[9px]">{{ r.total_valid }}</span></td>
+                        <td class="text-center"><span class="metric-badge high text-[9px]">{{ r.total_discarded }}</span></td>
+                        <td class="text-right">
+                            <button type="button"
+                                    onclick="abrirModalDetalle({{ r.id }})"
+                                    class="inline-flex items-center gap-1.5 rounded-lg bg-[var(--blue-soft)] px-2.5 py-1 text-[9px] font-bold text-[var(--blue)] transition hover:brightness-105">
+                                {% trans "Ver párrafos" %}
+                            </button>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="8" class="!py-12 text-center text-[11px] italic text-[var(--muted)]">
+                            {% trans "No se encontraron registros de auditoría que coincidan con los filtros seleccionados." %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+</div>
+
+<!-- Modal para ver detalle de párrafos auditados -->
+<div id="modalDetalle" class="fixed inset-0 z-50 flex hidden items-center justify-center bg-[rgba(3,10,22,0.72)] p-4 backdrop-blur-sm">
+    <div class="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-[18px] border border-[var(--line)] bg-[var(--surface)] shadow-2xl">
+        <div class="flex items-start justify-between border-b border-[var(--line)] bg-[var(--surface-hover)] p-5">
+            <div>
+                <h3 class="text-sm font-semibold tracking-tight text-[var(--ink)]" id="modalTitulo">{% trans "Detalle de la auditoría" %}</h3>
+                <p class="mt-1 text-[10px] text-[var(--muted)]" id="modalSubtitulo"></p>
+            </div>
+            <button type="button" onclick="cerrarModalDetalle()" class="modal-close" aria-label="{% trans 'Cerrar' %}">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+
+        <div class="flex-1 space-y-4 overflow-y-auto p-6" id="modalContenido">
+            <p class="py-4 text-center text-[11px] text-[var(--muted)]">{% trans "Cargando detalle..." %}</p>
+        </div>
+
+        <div class="flex justify-end border-t border-[var(--line)] bg-[var(--surface-hover)] p-4">
+            <button type="button" onclick="cerrarModalDetalle()" class="dialog-cancel">
+                {% trans "Cerrar" %}
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+{% trans "Cargando párrafos..." as t_cargando %}
+{% trans 'Auditoría: "${data.word}" en ${data.company} (${data.year})' as t_titulo %}
+{% trans 'Realizada por ${data.user} el ${data.reviewed_at} | ${data.total_valid} válidas, ${data.total_discarded} descartadas' as t_subtitulo %}
+{% trans "No hay detalle de párrafos guardado para esta revisión." as t_sin_detalle %}
+{% trans "Error al cargar el detalle de la revisión." as t_error_detalle %}
+{% trans "Descartado" as t_descartado %}
+{% trans "Válido" as t_valido %}
+{% trans "Párrafo" as t_parrafo %}
+{% trans "ocurrencia" as t_ocurrencia %}
+{% trans "ocurrencias" as t_ocurrencias %}
+document.addEventListener("DOMContentLoaded", function() {
+    const form = document.getElementById("filterForm");
+    const yearSelect = document.getElementById("year");
+    const companySelect = document.getElementById("company");
+    const userSelect = document.getElementById("user");
+
+    // Al cambiar el año: limpia la empresa previa para listar las empresas del nuevo año y filtra de inmediato
+    if (yearSelect && form) {
+        yearSelect.addEventListener("change", function() {
+            if (companySelect) {
+                companySelect.value = "";
+            }
+            form.submit();
+        });
+    }
+
+    // Al seleccionar una empresa: filtra inmediatamente por ese año y empresa
+    if (companySelect && form) {
+        companySelect.addEventListener("change", function() {
+            form.submit();
+        });
+    }
+
+    // Al seleccionar un auditor: filtra inmediatamente
+    if (userSelect && form) {
+        userSelect.addEventListener("change", function() {
+            form.submit();
+        });
+    }
+});
+
+function abrirModalDetalle(reviewId) {
+    const modal = document.getElementById("modalDetalle");
+    const titulo = document.getElementById("modalTitulo");
+    const subtitulo = document.getElementById("modalSubtitulo");
+    const contenido = document.getElementById("modalContenido");
+
+    modal.classList.remove("hidden");
+    contenido.innerHTML = '<p class="py-4 text-center text-[11px] text-[var(--muted)]">{{ t_cargando|escapejs }}</p>';
+
+    fetch(`/concealment_detection/historial/${reviewId}/detalle/`)
+        .then(response => {
+            if (!response.ok) throw new Error("HTTP " + response.status);
+            return response.json();
+        })
+        .then(data => {
+            titulo.textContent = `{{ t_titulo|escapejs }}`;
+            subtitulo.textContent = `{{ t_subtitulo|escapejs }}`;
+
+            if (!data.paragraphs || data.paragraphs.length === 0) {
+                contenido.innerHTML = '<p class="py-4 text-center text-[11px] text-[var(--muted)]">{{ t_sin_detalle|escapejs }}</p>';
+                return;
+            }
+
+            let html = "";
+            data.paragraphs.forEach((p, idx) => {
+                const esDescartado = p.discarded;
+                const borderClass = esDescartado ? "border-[var(--red)] bg-[var(--red-soft)]" : "border-[var(--teal)] bg-[var(--teal-soft)]";
+                const badge = esDescartado
+                    ? '<span class="metric-badge high text-[9px]">{{ t_descartado|escapejs }}</span>'
+                    : '<span class="metric-badge low text-[9px]">{{ t_valido|escapejs }}</span>';
+
+                html += `
+                    <div class="rounded-xl border p-4 ${borderClass}">
+                        <div class="mb-2 flex items-center justify-between gap-3">
+                            <span class="text-[10px] font-semibold text-[var(--muted)]">{{ t_parrafo|escapejs }} #${idx + 1} (${p.occurrences} ${p.occurrences > 1 ? '{{ t_ocurrencias|escapejs }}' : '{{ t_ocurrencia|escapejs }}'})</span>
+                            ${badge}
+                        </div>
+                        <p class="text-[11px] leading-6 text-[var(--ink)]">${p.paragraph_text}</p>
+                    </div>
+                `;
+            });
+
+            contenido.innerHTML = html;
+        })
+        .catch(err => {
+            contenido.innerHTML = '<p class="py-4 text-center text-[11px] text-[var(--red)]">{{ t_error_detalle|escapejs }}</p>';
+            console.error(err);
+        });
+}
+
+function cerrarModalDetalle() {
+    document.getElementById("modalDetalle").classList.add("hidden");
+}
+
+document.addEventListener("keydown", function(e) {
+    if (e.key === "Escape") {
+        cerrarModalDetalle();
+    }
+});
+</script>
+{% endblock %}

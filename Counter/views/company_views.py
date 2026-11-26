@@ -1,35 +1,82 @@
 from django.contrib.auth.decorators import login_required
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse, HttpResponse
-from django.shortcuts import render
+from django.shortcuts import render, get_object_or_404
+from django.core.paginator import Paginator
+from django.db.models import Q, Count
+from django.db.models.functions import Trim
 import json
 from ..models import Company, Province
+from ..workspace_utils import get_active_workspace
 
 
 @login_required
 def company_view(request):
-    companies = Company.objects.all()
-    provinces = Province.objects.all()
+    current_ws = get_active_workspace(request)
+    search = request.GET.get("q", "").strip()
+    province_filter = request.GET.get("province", "").strip()
+    page_number = request.GET.get("page", 1)
+
+    companies_qs = (
+        Company.objects
+        .select_related("province")
+        # Denegar por defecto: sin espacio activo la lista sale vacía, jamás global.
+        .filter(workspace=current_ws)
+        .annotate(num_reports=Count("report"))
+    )
+
+    companies_qs = (
+        companies_qs
+        .annotate(clean_name=Trim("name"))
+        .order_by("clean_name")
+    )
+
+    if search:
+        companies_qs = companies_qs.filter(
+            Q(ruc__icontains=search)
+            | Q(name__icontains=search)
+            | Q(province__name__icontains=search)
+        )
+
+    if province_filter:
+        companies_qs = companies_qs.filter(province_id=province_filter)
+
+    paginator = Paginator(companies_qs, 6)
+    page_obj = paginator.get_page(page_number)
+
+    provinces = Province.objects.all().order_by("name")
+
     return render(
         request,
         "companies.html",
         {
-            "companies": companies,
+            "companies": page_obj,
+            "page_obj": page_obj,
             "provinces": provinces,
+            "search": search,
+            "province_filter": province_filter,
+            "current_workspace": current_ws,
         },
     )
 
 
 @login_required
 def see_company_json(request, company_id):
-    company = Company.objects.get(id=company_id)
-    data = {"ruc": company.ruc, "name": company.name, "province": company.province.name}
+    current_ws = get_active_workspace(request)
+    company = get_object_or_404(Company, id=company_id, workspace=current_ws)
+    data = {"ruc": company.ruc, "name": company.name, "province": company.province.name, "province_id": company.province_id}
     return JsonResponse(data)
 
 
+@login_required
 @csrf_exempt
 def create_company(request):
     if request.method == "POST":
+        current_ws = get_active_workspace(request)
+        if current_ws is None:
+            return JsonResponse(
+                {"error": "No hay un espacio de trabajo activo."}, status=403
+            )
         ruc = request.POST.get("ruc")
         name = request.POST.get("name")
         province_id = request.POST.get("province")
@@ -50,7 +97,7 @@ def create_company(request):
         if errors:
             return JsonResponse({"errors": errors}, status=400)
 
-        company = Company.objects.create(ruc=ruc, name=name, province=province)
+        company = Company.objects.create(ruc=ruc, name=name, province=province, workspace=current_ws)
 
         return JsonResponse(
             {
@@ -66,13 +113,16 @@ def create_company(request):
 
 @login_required
 def delete_company(request, company_id):
-    Company.objects.filter(id=company_id).delete()
+    current_ws = get_active_workspace(request)
+    Company.objects.filter(id=company_id, workspace=current_ws).delete()
     return HttpResponse(status=204)
 
 
+@login_required
 @csrf_exempt
 def update_company(request, company_id):
-    company = Company.objects.get(id=company_id)
+    current_ws = get_active_workspace(request)
+    company = get_object_or_404(Company, id=company_id, workspace=current_ws)
     data = json.loads(request.body)
 
     ruc = data.get("ruc")

@@ -1,8 +1,10 @@
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import render, get_object_or_404
-from django.db.models import Sum
+from django.db.models import Sum, Q
+from django.db.models.functions import Trim
 from django.http import JsonResponse
 from ..models import (
+    Company,
     Report,
     ConcealmentReview,
     ConcealmentParagraphReview,
@@ -11,15 +13,24 @@ from ..models import (
     ExpertWord,
 )
 
-from ..main import find_paragraph
+from ..main import find_paragraph, sincronizar_palabras_total_count
 from ..utils import quitar_tildes, recalcular_metricas_reporte
+from ..workspace_utils import get_active_workspace
 
 
 @login_required
 def concealment_detection_view(request):
+    current_ws = get_active_workspace(request)
+    # Denegar por defecto: todo (reportes, años y listas) queda acotado al espacio activo.
+    reports_qs = Report.objects.filter(workspace=current_ws)
+    expert_lists = ExpertWord.objects.filter(workspace=current_ws)
 
-    reports = Report.objects.all()
-    expert_lists = ExpertWord.objects.all()
+    reports = (
+        reports_qs
+        .select_related("company")
+        .annotate(clean_company=Trim("company__name"))
+        .order_by("clean_company", "name")
+    )
 
     selected_report = None
     paragraphs = []
@@ -40,11 +51,11 @@ def concealment_detection_view(request):
         )
     
     years = (
-    Report.objects
-    .values_list("year", flat=True)
-    .distinct()
-    .order_by("-year")
-)
+        reports_qs
+        .values_list("year", flat=True)
+        .distinct()
+        .order_by("-year")
+    )
 
     if request.method == "POST":
 
@@ -52,8 +63,9 @@ def concealment_detection_view(request):
         palabra = request.POST.get("palabra")
 
         selected_report = get_object_or_404(
-            Report,
-            id=report_id
+            Report.objects.select_related("company").annotate(clean_company=Trim("company__name")),
+            id=report_id,
+            workspace=current_ws,
         )
 
         paragraphs = find_paragraph(
@@ -74,6 +86,7 @@ def concealment_detection_view(request):
 
         review = ConcealmentReview.objects.create(
             report=selected_report,
+            user=request.user,
             word=palabra,
             total_found=total_found,
             total_valid=0,
@@ -118,18 +131,7 @@ def concealment_detection_view(request):
             }
         )
 
-        nuevo_total = (
-            TotalCountReport.objects
-            .filter(word=palabra_normalizada)
-            .aggregate(total=Sum("quantity"))
-        )["total"] or 0
-
-        TotalCount.objects.update_or_create(
-            word=palabra_normalizada,
-            defaults={
-                "quantity": nuevo_total
-            }
-        )
+        sincronizar_palabras_total_count([palabra_normalizada], workspace=selected_report.workspace)
 
         recalcular_metricas_reporte(
             selected_report
@@ -145,23 +147,29 @@ def concealment_detection_view(request):
             )
         )
 
+        selected_year = str(selected_report.year) if selected_report and selected_report.year else ""
+        reports = (
+            reports_qs
+            .filter(year=selected_report.year)
+            .select_related("company")
+            .annotate(clean_company=Trim("company__name"))
+            .order_by("clean_company", "name")
+        )
+
     elif request.method == "GET":
 
         palabra = request.GET.get("palabra")
         report_id = request.GET.get("report_id")
-        selected_year = request.GET.get("year")
-
-        if selected_year:
-            reports = Report.objects.filter(year=selected_year).order_by("name")
-        else:
-            reports = Report.objects.none()
+        selected_year = request.GET.get("year") or ""
 
         if report_id:
-
             selected_report = get_object_or_404(
-                Report,
-                id=report_id
+                Report.objects.select_related("company").annotate(clean_company=Trim("company__name")),
+                id=report_id,
+                workspace=current_ws,
             )
+            if not selected_year and selected_report.year:
+                selected_year = str(selected_report.year)
 
             report_words = (
                 TotalCountReport.objects
@@ -172,6 +180,17 @@ def concealment_detection_view(request):
                     flat=True
                 )
             )
+
+        if selected_year:
+            reports = (
+                reports_qs
+                .filter(year=selected_year)
+                .select_related("company")
+                .annotate(clean_company=Trim("company__name"))
+                .order_by("clean_company", "name")
+            )
+        else:
+            reports = Report.objects.none()
 
         if palabra and report_id:
 
@@ -218,15 +237,49 @@ def concealment_detection_view(request):
     if palabra is None:
         palabra = ""
 
+    total_ocurrencias = sum(p["count"] for p in paragraphs if p.get("checked", False))
+    total_descartadas = sum(p["count"] for p in paragraphs if not p.get("checked", False))
+
+    findings_list = []
+    if selected_report:
+        if origen_palabras == "experto" and lista_experto_id:
+            try:
+                lista_obj = expert_lists.get(id=lista_experto_id)
+                exp_words = lista_obj.words or []
+                counts_map = dict(
+                    TotalCountReport.objects
+                    .filter(report=selected_report, word__in=[w.lower().strip() for w in exp_words])
+                    .values_list("word", "quantity")
+                )
+                findings_list = [{"word": w, "quantity": counts_map.get(w.lower().strip(), 0)} for w in exp_words]
+            except (ExpertWord.DoesNotExist, ValueError):
+                findings_list = []
+        else:
+            findings_list = list(
+                TotalCountReport.objects
+                .filter(report=selected_report)
+                .order_by("-quantity", "word")
+                .values("word", "quantity")
+            )
+
     expert_lists_data = []
 
     for lista in expert_lists:
-
+        clean_words_list = [str(w).strip() for w in (lista.words or []) if w]
         expert_lists_data.append({
             "id": lista.id,
             "name": lista.name,
-            "words": lista.words or []
+            "words": clean_words_list,
         })
+
+    recent_reviews = []
+    if selected_report:
+        recent_reviews = (
+            ConcealmentReview.objects
+            .filter(report=selected_report)
+            .select_related("user")
+            .order_by("-reviewed_at")[:5]
+        )
 
     return render(
         request,
@@ -236,13 +289,18 @@ def concealment_detection_view(request):
             "expert_lists": expert_lists,
             "expert_lists_data": expert_lists_data,
             "report_words": report_words,
+            "findings_list": findings_list,
             "origen_palabras": origen_palabras,
             "lista_experto_id": lista_experto_id,
 
             "selected_report": selected_report,
             "paragraphs": paragraphs,
             "palabra": palabra,
+            "total_ocurrencias": total_ocurrencias,
+            "total_descartadas": total_descartadas,
             "years": years,
+            "selected_year": str(selected_year),
+            "recent_reviews": recent_reviews,
         },
     )
 
@@ -256,7 +314,7 @@ def get_report_words(request):
 
     palabras = list(
         TotalCountReport.objects
-        .filter(report_id=report_id)
+        .filter(report_id=report_id, report__workspace=get_active_workspace(request))
         .order_by("word")
         .values_list("word", flat=True)
     )
@@ -265,20 +323,155 @@ def get_report_words(request):
 
 @login_required
 def get_reports_by_year(request):
-
     year = request.GET.get("year")
+    if not year:
+        return JsonResponse([], safe=False)
 
-    reports = list(
-        Report.objects
-        .filter(year=year)
-        .order_by("name")
-        .values(
-            "id",
-            "name"
-        )
+    current_ws = get_active_workspace(request)
+    reports_qs = Report.objects.filter(year=year, workspace=current_ws)
+
+    reports_qs = (
+        reports_qs
+        .select_related("company")
+        .annotate(clean_company=Trim("company__name"))
+        .order_by("clean_company", "name")
     )
+
+    reports = []
+    for r in reports_qs:
+        company_name = getattr(r, "clean_company", None) or (r.company.name.strip() if r.company and r.company.name else "")
+        if company_name:
+            label = company_name
+            if r.name and r.name != str(r.year) and r.name.lower() != "reporte":
+                label = f"{company_name} - {r.name}"
+        else:
+            label = r.name or f"Reporte {r.id}"
+
+        reports.append({
+            "id": r.id,
+            "name": label,
+        })
 
     return JsonResponse(
         reports,
         safe=False
     )
+
+@login_required
+def concealment_history_view(request):
+    from django.contrib.auth.models import User
+
+    current_ws = get_active_workspace(request)
+    # Denegar por defecto: sin espacio activo, historial vacío.
+    reviews_qs = (
+        ConcealmentReview.objects
+        .select_related("report", "report__company", "user")
+        .filter(report__workspace=current_ws)
+    )
+
+    reviews_qs = (
+        reviews_qs
+        .annotate(clean_company=Trim("report__company__name"))
+        .order_by("-reviewed_at")
+    )
+
+    year_filter = request.GET.get("year", "").strip()
+    company_filter = request.GET.get("company", "").strip()
+    word_filter = request.GET.get("word", "").strip()
+    user_filter = request.GET.get("user", "").strip()
+
+    if year_filter:
+        reviews_qs = reviews_qs.filter(report__year=year_filter)
+    if company_filter:
+        if company_filter.isdigit():
+            reviews_qs = reviews_qs.filter(report__company_id=int(company_filter))
+        else:
+            reviews_qs = reviews_qs.filter(report__company__name__icontains=company_filter)
+    if word_filter:
+        reviews_qs = reviews_qs.filter(word__icontains=word_filter)
+    if user_filter:
+        reviews_qs = reviews_qs.filter(user__username__icontains=user_filter)
+
+    reports_scope = Report.objects.filter(workspace=current_ws)
+
+    years = (
+        reports_scope
+        .values_list("year", flat=True)
+        .distinct()
+        .order_by("-year")
+    )
+
+    # Empresas para el selector desplegable
+    companies_qs = Company.objects.filter(
+        report__isnull=False, workspace=current_ws
+    )
+    if year_filter:
+        companies_qs = companies_qs.filter(report__year=year_filter)
+
+    companies = (
+        companies_qs
+        .distinct()
+        .annotate(clean_name=Trim("name"))
+        .order_by("clean_name")
+    )
+
+    # Lista de auditores registrados
+    auditors = User.objects.filter(is_active=True).order_by("username")
+
+    total_reviews_count = reviews_qs.count()
+    total_words_validated = reviews_qs.aggregate(sum_valid=Sum("total_valid"))["sum_valid"] or 0
+    total_words_discarded = reviews_qs.aggregate(sum_discarded=Sum("total_discarded"))["sum_discarded"] or 0
+
+    return render(
+        request,
+        "concealment_history.html",
+        {
+            "reviews": reviews_qs[:100],
+            "years": years,
+            "companies": companies,
+            "auditors": auditors,
+            "year_filter": year_filter,
+            "company_filter": company_filter,
+            "word_filter": word_filter,
+            "user_filter": user_filter,
+            "total_reviews_count": total_reviews_count,
+            "total_words_validated": total_words_validated,
+            "total_words_discarded": total_words_discarded,
+        },
+    )
+
+
+@login_required
+def concealment_history_detail_ajax(request, review_id):
+    current_ws = get_active_workspace(request)
+    review = get_object_or_404(
+        ConcealmentReview.objects.select_related("report", "report__company", "user"),
+        id=review_id,
+        report__workspace=current_ws,
+    )
+
+    paragraphs = list(
+        ConcealmentParagraphReview.objects
+        .filter(review=review)
+        .values("id", "paragraph_text", "occurrences", "discarded")
+    )
+
+    company_name = ""
+    if review.report and review.report.company:
+        company_name = review.report.company.name.strip()
+
+    data = {
+        "id": review.id,
+        "word": review.word,
+        "company": company_name,
+        "year": review.report.year if review.report else None,
+        "user": review.user.username if review.user else "Sin registrar",
+        "reviewed_at": review.reviewed_at.strftime("%d/%m/%Y %H:%M"),
+        "total_found": review.total_found,
+        "total_valid": review.total_valid,
+        "total_discarded": review.total_discarded,
+        "paragraphs": paragraphs,
+    }
+
+    return JsonResponse(data)
+

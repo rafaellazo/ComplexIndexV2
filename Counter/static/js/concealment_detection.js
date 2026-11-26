@@ -1,34 +1,71 @@
 document.addEventListener("DOMContentLoaded", function () {
 
     // ==========================================
-    // Total de ocurrencias
+    // Total de ocurrencias y dictamen
     // ==========================================
 
     const checks = document.querySelectorAll(".parrafo-check");
     const totalSpan = document.getElementById("total-ocurrencias");
+    const totalDescartadasSpan = document.getElementById("total-descartadas");
+    const btnMarcarTodos = document.getElementById("btn-marcar-todos");
+    const btnDesmarcarTodos = document.getElementById("btn-desmarcar-todos");
+    const searchFindings = document.getElementById("search-findings");
 
     function recalcular() {
-
         if (!totalSpan) {
             return;
         }
 
         let total = 0;
+        let descartadas = 0;
 
         checks.forEach(check => {
-
+            const count = parseInt(check.dataset.count, 10) || 0;
             if (check.checked) {
-                total += parseInt(check.dataset.count);
+                total += count;
+            } else {
+                descartadas += count;
             }
-
         });
 
         totalSpan.textContent = total;
+        if (totalDescartadasSpan) {
+            totalDescartadasSpan.textContent = descartadas;
+        }
     }
 
     checks.forEach(check => {
         check.addEventListener("change", recalcular);
     });
+
+    if (btnMarcarTodos) {
+        btnMarcarTodos.addEventListener("click", function () {
+            checks.forEach(check => {
+                check.checked = true;
+            });
+            recalcular();
+        });
+    }
+
+    if (btnDesmarcarTodos) {
+        btnDesmarcarTodos.addEventListener("click", function () {
+            checks.forEach(check => {
+                check.checked = false;
+            });
+            recalcular();
+        });
+    }
+
+    if (searchFindings) {
+        searchFindings.addEventListener("input", function () {
+            const term = this.value.toLowerCase().trim();
+            const items = document.querySelectorAll(".finding-item");
+            items.forEach(item => {
+                const word = (item.dataset.word || item.querySelector("span")?.textContent || "").toLowerCase();
+                item.style.display = word.includes(term) ? "" : "none";
+            });
+        });
+    }
 
     recalcular();
 
@@ -87,13 +124,13 @@ document.addEventListener("DOMContentLoaded", function () {
         if (!reportId) {
 
             palabraSelect.innerHTML =
-                '<option value="">Seleccione un reporte</option>';
+                '<option value="">Seleccione una palabra</option>';
 
             return;
         }
 
         palabraSelect.innerHTML =
-            '<option value="">Cargando...</option>';
+            '<option value="">Cargando palabras...</option>';
 
         fetch(
             `/concealment_detection/ajax/report-words/?report_id=${reportId}`
@@ -120,6 +157,11 @@ document.addEventListener("DOMContentLoaded", function () {
 
                 return;
             }
+
+            const defaultOpt = document.createElement("option");
+            defaultOpt.value = "";
+            defaultOpt.textContent = "Seleccione una palabra";
+            palabraSelect.appendChild(defaultOpt);
 
             let seleccionada = false;
 
@@ -169,9 +211,12 @@ document.addEventListener("DOMContentLoaded", function () {
 
         if (!year) {
             reportSelect.innerHTML =
-                '<option value="">Seleccione un año</option>';
+                '<option value="">Seleccione una empresa</option>';
             return;
         }
+
+        reportSelect.innerHTML =
+            '<option value="">Cargando empresas...</option>';
 
         fetch(
             `/concealment_detection/ajax/reports-by-year/?year=${year}`
@@ -202,24 +247,41 @@ document.addEventListener("DOMContentLoaded", function () {
                 return;
             }
 
+            const defaultOpt = document.createElement("option");
+            defaultOpt.value = "";
+            defaultOpt.textContent = "Seleccione una empresa";
+            reportSelect.appendChild(defaultOpt);
+
+            const selectedId = reportSelect.dataset.selected || "";
+            let encontrada = false;
+
             data.forEach(report => {
-
-                const option =
-                    document.createElement("option");
-
+                const option = document.createElement("option");
                 option.value = report.id;
                 option.textContent = report.name;
 
-                reportSelect.appendChild(option);
+                if (selectedId && String(report.id) === String(selectedId)) {
+                    option.selected = true;
+                    encontrada = true;
+                }
 
+                reportSelect.appendChild(option);
             });
 
-            if (origen.value === "reporte") {
+            if (!encontrada && reportSelect.options.length > 0) {
+                reportSelect.selectedIndex = 0;
+            }
+            reportSelect.dataset.selected = reportSelect.value;
+
+            if (origen.value === "reporte" && reportSelect.value) {
 
                 cargarPalabrasReporte(
                     reportSelect.value
                 );
 
+            } else if (!reportSelect.value) {
+                palabraSelect.innerHTML =
+                    '<option value="">Seleccione una palabra</option>';
             }
 
         })
@@ -229,6 +291,9 @@ document.addEventListener("DOMContentLoaded", function () {
                 "Error cargando reportes:",
                 error
             );
+
+            reportSelect.innerHTML =
+                '<option value="">Error al cargar</option>';
 
         });
 
@@ -242,6 +307,8 @@ document.addEventListener("DOMContentLoaded", function () {
         "change",
         function () {
 
+            this.dataset.selected = this.value;
+
             if (
                 origen.value === "reporte"
             ) {
@@ -252,6 +319,17 @@ document.addEventListener("DOMContentLoaded", function () {
 
             }
 
+        }
+    );
+
+    // ==========================================
+    // Cambio de palabra
+    // ==========================================
+
+    palabraSelect.addEventListener(
+        "change",
+        function () {
+            this.dataset.selected = this.value;
         }
     );
 
@@ -319,6 +397,11 @@ document.addEventListener("DOMContentLoaded", function () {
                     return;
                 }
 
+                const defaultOpt = document.createElement("option");
+                defaultOpt.value = "";
+                defaultOpt.textContent = "Seleccione una palabra";
+                palabraSelect.appendChild(defaultOpt);
+
                 let seleccionada = false;
 
                 lista.words.forEach(word => {
@@ -359,14 +442,18 @@ document.addEventListener("DOMContentLoaded", function () {
 
     actualizarVisibilidad();
 
-    if (
-        origen.value === "reporte"
-    ) {
+    if (reportSelect.dataset.selected && reportSelect.dataset.selected.trim() !== "") {
+        reportSelect.value = reportSelect.dataset.selected;
+    }
 
+    if (
+        origen.value === "reporte" &&
+        reportSelect.value &&
+        (!palabraSelect || palabraSelect.options.length <= 1)
+    ) {
         cargarPalabrasReporte(
             reportSelect.value
         );
-
     }
 
     if (
@@ -383,13 +470,12 @@ document.addEventListener("DOMContentLoaded", function () {
 
     if (
         yearSelect &&
-        yearSelect.value
+        yearSelect.value &&
+        reportSelect.options.length === 0
     ) {
-
         cargarReportes(
             yearSelect.value
         );
-
     }
     
     if (yearSelect) {
@@ -398,6 +484,7 @@ document.addEventListener("DOMContentLoaded", function () {
             "change",
             function () {
 
+                reportSelect.dataset.selected = "";
                 cargarReportes(
                     this.value
                 );

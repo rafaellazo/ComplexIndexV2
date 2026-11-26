@@ -1,0 +1,931 @@
+{% extends "base.html" %}
+{% load i18n dict_filters %}
+
+{% block title %}{% trans "Espacios de Trabajo" %} | ELI{% endblock %}
+{% block body_class %}eli-theme{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-[1440px] px-5 py-7 sm:px-7 lg:px-9">
+
+    <!-- ===================================================================== -->
+    <!-- Cabecera de Página (PageTitle estilo Figma)                           -->
+    <!-- ===================================================================== -->
+    <header class="page-title flex flex-col gap-4 border-b border-[var(--line)] pb-6 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+            <div class="flex flex-wrap items-center gap-2 text-[10px] font-semibold text-[var(--muted)]">
+                {% if is_expert_user %}
+                <a href="{% url 'index' %}" class="inline-flex items-center gap-1.5 transition hover:text-[var(--blue)]">
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+                    </svg>
+                    <span>{% trans "Inicio" %}</span>
+                </a>
+                {% else %}
+                <a href="{% url 'panel' %}" class="inline-flex items-center gap-1.5 transition hover:text-[var(--blue)]">
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
+                    </svg>
+                    <span>{% trans "Observatorio" %}</span>
+                </a>
+                {% endif %}
+                <span class="text-[var(--faint)]">/</span>
+                <span class="text-[var(--ink)]">{% trans "Espacios de trabajo" %}</span>
+            </div>
+
+            <div class="mt-4 flex flex-wrap items-center gap-3">
+                <p class="eyebrow">{% trans "Administración" %}</p>
+                <span class="inline-flex items-center rounded-full border border-[var(--line)] bg-[var(--blue-soft)] px-2.5 py-0.5 font-mono text-[9px] font-semibold text-[var(--blue)]">
+                    {{ total_workspaces }} {% if total_workspaces == 1 %}{% trans "espacio" %}{% else %}{% trans "espacios" %}{% endif %}
+                </span>
+            </div>
+
+            <h1 class="mt-2 text-3xl font-semibold tracking-[-0.04em] text-[var(--ink)] sm:text-4xl">
+                {% trans "Espacios de trabajo" %}
+            </h1>
+            <p class="mt-2 max-w-2xl text-xs leading-6 text-[var(--muted)]">
+                {% trans "Organiza corpus, equipos y permisos en entornos independientes para cada auditoría." %}
+            </p>
+        </div>
+
+        {% if not is_expert_user %}
+        <button type="button" onclick="openCreateModal()"
+                class="primary-action dialog-confirm inline-flex items-center gap-2 self-start px-5 py-2.5 text-xs lg:self-end">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
+            </svg>
+            <span>{% trans "Nuevo espacio" %}</span>
+        </button>
+        {% endif %}
+    </header>
+
+    <!-- ===================================================================== -->
+    <!-- Visión General (workspace-overview: Espacio Activo + Grilla Métricas) -->
+    <!-- ===================================================================== -->
+    {% if active_workspace %}
+    <section class="workspace-overview mt-7">
+        <!-- Espacio Activo / Destacado -->
+        <div class="workspace-current flex flex-col justify-between">
+            <div>
+                <div class="flex items-center justify-between">
+                    <p class="font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-[#88bcff]">{% trans "Espacio activo" %}</p>
+                    <span class="workspace-live"><i></i> {% trans "EN LÍNEA" %}</span>
+                </div>
+
+                <div class="mt-6 flex items-center gap-4">
+                    <span class="workspace-mark">
+                        {{ active_workspace.monogram }}
+                    </span>
+                    <div class="min-w-0 flex-1">
+                        <h2 class="truncate font-semibold tracking-tight text-white" title="{{ active_workspace.name }}">
+                            {{ active_workspace.name }}
+                        </h2>
+                        <p class="truncate text-white/70">
+                            {% if active_workspace.project_type %}{{ active_workspace.project_type }}{% elif active_workspace.description %}{{ active_workspace.description }}{% else %}{% trans "Entorno independiente de auditoría" %}{% endif %}
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="workspace-current-stats">
+                <div>
+                    <strong>{{ active_workspace_data.reports_count|default:0|intcomma }}</strong>
+                    <span>{% trans "expedientes" %}</span>
+                </div>
+                <div>
+                    <strong>{{ active_workspace_data.companies_count|default:0|intcomma }}</strong>
+                    <span>{% trans "empresas" %}</span>
+                </div>
+                <div>
+                    <strong>{{ active_workspace_data.members_count|default:1 }}</strong>
+                    <span>{% trans "miembros" %}</span>
+                </div>
+                <div>
+                    <strong>
+                        {% if active_workspace_data.total_words >= 1000000 %}
+                            {{ active_workspace_data.total_words|compact_number }}
+                        {% elif active_workspace_data.total_words >= 1000 %}
+                            {{ active_workspace_data.total_words|intcomma }}
+                        {% else %}
+                            {{ active_workspace_data.total_words|default:0 }}
+                        {% endif %}
+                    </strong>
+                    <span>{% trans "palabras" %}</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 2x2 Métricas de la Organización -->
+        <div class="workspace-stat-grid">
+            <div class="workspace-stat">
+                <span>
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+                    </svg>
+                </span>
+                <div>
+                    <strong>{% if total_workspaces < 10 %}0{{ total_workspaces }}{% else %}{{ total_workspaces }}{% endif %}</strong>
+                    <p>{% trans "Espacios accesibles" %}</p>
+                </div>
+            </div>
+
+            <div class="workspace-stat">
+                <span>
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4zm6-4a3 3 0 11-3-3"/>
+                    </svg>
+                </span>
+                <div>
+                    <strong>{% if total_collaborators < 10 %}0{{ total_collaborators }}{% else %}{{ total_collaborators }}{% endif %}</strong>
+                    <p>{% trans "Colaboradores únicos" %}</p>
+                </div>
+            </div>
+
+            <div class="workspace-stat">
+                <span>
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                    </svg>
+                </span>
+                <div>
+                    <strong>{{ total_reports_all|intcomma }}</strong>
+                    <p>{% trans "Expedientes totales" %}</p>
+                </div>
+            </div>
+
+            <div class="workspace-stat">
+                <span>
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/>
+                    </svg>
+                </span>
+                <div>
+                    <strong>{{ total_companies_all|intcomma }}</strong>
+                    <p>{% trans "Empresas vinculadas" %}</p>
+                </div>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+    <!-- ===================================================================== -->
+    <!-- Sección Principal: Directorio de Todos los Espacios                   -->
+    <!-- ===================================================================== -->
+    <section class="mt-6">
+        <!-- Directorio de Todos los Espacios -->
+        <div class="surface-panel workspace-directory-panel">
+            <div class="workspace-toolbar">
+                <div>
+                    <p class="eyebrow">{% trans "Directorio" %}</p>
+                    <h2>{% trans "Todos los espacios" %}</h2>
+                </div>
+                <form method="get" class="workspace-search">
+                    <svg class="h-3.5 w-3.5 shrink-0 text-[var(--faint)]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                    </svg>
+                    <input type="text" name="q" value="{{ search }}" placeholder="{% trans 'Buscar espacio…' %}" autocomplete="off">
+                    {% if search %}
+                    <a href="{% url 'workspaces_list' %}" class="ml-1 text-[8px] font-bold text-[var(--muted)] hover:text-[var(--blue)]">
+                        ✕
+                    </a>
+                    {% endif %}
+                </form>
+            </div>
+
+            <div class="workspace-list divide-y divide-[var(--line)]">
+                {% for item in workspaces_data %}
+                {% with ws=item.workspace %}
+                <article class="workspace-row {% if item.is_active %}active{% endif %}" id="ws-row-{{ ws.id }}">
+                    <!-- Avatar Monograma con Tono de Color -->
+                    <span class="workspace-avatar {{ ws.color_tone }}">{{ ws.monogram }}</span>
+
+                    <!-- Identidad: Nombre, Tipo, Chips -->
+                    <div class="workspace-identity min-w-0">
+                        <div class="flex items-center gap-2">
+                            <h3 class="truncate text-xs font-semibold text-[var(--ink)]" title="{{ ws.name }}">{{ ws.name }}</h3>
+                            {% if item.is_active %}
+                            <span class="active-chip">{% trans "ACTIVO" %}</span>
+                            {% endif %}
+                            {% if ws.is_archived %}
+                            <span class="archived-chip" title="{% trans 'Espacio archivado: sus datos están guardados pero no aparecen en el resto de la aplicación.' %}">{% trans "Archivado" %}</span>
+                            {% endif %}
+                        </div>
+                        <p class="truncate text-[9px] text-[var(--muted)]">
+                            {% if ws.project_type %}{{ ws.project_type }}{% elif ws.description %}{{ ws.description }}{% else %}{% trans "Sin categoría" %}{% endif %}
+                        </p>
+                    </div>
+
+                    <!-- Metadatos de Rol del Usuario -->
+                    <div class="workspace-meta">
+                        <span>{% trans "ROL" %}</span>
+                        <strong>{{ item.user_role }}</strong>
+                    </div>
+
+                    <!-- Metadatos de Actividad Reciente -->
+                    <div class="workspace-meta workspace-activity">
+                        <span>{% trans "ACTIVIDAD" %}</span>
+                        <strong>{{ ws.updated_at|date:"d M Y"|default:_("Reciente") }}</strong>
+                    </div>
+
+                    <!-- Pila de Miembros -->
+                    <div class="workspace-people">
+                        {% for m in item.members_preview %}
+                        <i title="{{ m.username }}">{{ m.initial }}</i>
+                        {% endfor %}
+                        {% if item.extra_members_count > 0 %}
+                        <span>+{{ item.extra_members_count }}</span>
+                        {% endif %}
+                    </div>
+
+                    <!-- Botones de Acción y Menú Desplegable -->
+                    <div class="workspace-row-actions">
+                        {% if item.is_active %}
+                        <button class="workspace-active-button" disabled>{% trans "En uso" %}</button>
+                        {% elif ws.is_archived %}
+                            {% if not is_expert_user %}
+                            <button type="button" onclick="toggleArchiveWorkspace('{{ ws.id }}', '{{ ws.name|escapejs }}', true)"
+                                    class="workspace-open-button">
+                                {% trans "Restaurar" %}
+                            </button>
+                            {% else %}
+                            <span class="py-1 text-[9px] italic text-[var(--faint)]">{% trans "Archivado" %}</span>
+                            {% endif %}
+                        {% else %}
+                        <a href="{% url 'workspace_select' ws.id %}" class="workspace-open-button">
+                            {% trans "Activar" %}
+                        </a>
+                        {% endif %}
+
+                        {% if not is_expert_user %}
+                        <div class="relative">
+                            <button type="button"
+                                    class="workspace-menu-btn"
+                                    aria-label="{% trans 'Opciones' %}"
+                                    onclick="toggleWorkspaceDropdown(event, 'ws-menu-{{ ws.id }}')">
+                                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"/>
+                                </svg>
+                            </button>
+
+                            <div id="ws-menu-{{ ws.id }}" class="workspace-menu-dropdown">
+                                <button type="button"
+                                        onclick="openEditModal('{{ ws.id }}', '{{ ws.name|escapejs }}', '{{ ws.description|default:''|escapejs }}', '{{ ws.project_type|default:''|escapejs }}', '{{ ws.color|default:'blue'|escapejs }}', '{{ ws.icon|default:'folder'|escapejs }}'); closeAllWorkspaceDropdowns();"
+                                        class="workspace-menu-item">
+                                    <svg class="h-3.5 w-3.5 text-[var(--blue)]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                                    </svg>
+                                    <span>{% trans "Editar espacio" %}</span>
+                                </button>
+
+                                {% if item.can_manage %}
+                                <button type="button"
+                                        onclick="openMembersModal('{{ ws.id }}', '{{ ws.name|escapejs }}'); closeAllWorkspaceDropdowns();"
+                                        class="workspace-menu-item">
+                                    <svg class="h-3.5 w-3.5 text-[var(--indigo)]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4zm6-4a3 3 0 11-3-3"/>
+                                    </svg>
+                                    <span>{% trans "Gestionar miembros" %}</span>
+                                </button>
+                                {% endif %}
+
+                                <button type="button"
+                                        onclick="toggleArchiveWorkspace('{{ ws.id }}', '{{ ws.name|escapejs }}', {% if ws.is_archived %}true{% else %}false{% endif %}); closeAllWorkspaceDropdowns();"
+                                        class="workspace-menu-item">
+                                    <svg class="h-3.5 w-3.5 text-[var(--amber)]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/>
+                                    </svg>
+                                    <span>{% if ws.is_archived %}{% trans "Restaurar espacio" %}{% else %}{% trans "Archivar espacio" %}{% endif %}</span>
+                                </button>
+
+                                {% if not item.reports_count and not item.companies_count %}
+                                <button type="button"
+                                        onclick="confirmDeleteWorkspace('{{ ws.id }}', '{{ ws.name|escapejs }}'); closeAllWorkspaceDropdowns();"
+                                        class="workspace-menu-item danger">
+                                    <svg class="h-3.5 w-3.5 text-[var(--red)]" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                                    </svg>
+                                    <span>{% trans "Eliminar espacio" %}</span>
+                                </button>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                </article>
+                {% endwith %}
+                {% empty %}
+                <div class="workspace-empty py-16 text-center">
+                    <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--blue-soft)] text-[var(--blue)]">
+                        <svg class="h-7 w-7" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+                        </svg>
+                    </div>
+                    {% if search %}
+                    <h3 class="mt-4 text-base font-semibold tracking-tight text-[var(--ink)]">{% trans "No se encontraron espacios de trabajo" %}</h3>
+                    <p class="mx-auto mt-2 max-w-md text-xs leading-6 text-[var(--muted)]">
+                        {% trans "No hay espacios que coincidan con tu búsqueda. Intenta con otros términos." %}
+                    </p>
+                    {% else %}
+                    <h3 class="mt-4 text-base font-semibold tracking-tight text-[var(--ink)]">{% trans "Aún no tienes acceso a ningún espacio de trabajo" %}</h3>
+                    <p class="mx-auto mt-2 max-w-xl text-xs leading-6 text-[var(--muted)]">
+                        {% trans "Los reportes, empresas y listas de palabras solo se muestran a quienes tienen acceso. Un administrador debe añadirte a un espacio para que aparezca aquí." %}
+                    </p>
+                    {% endif %}
+                    {% if not is_expert_user and not search %}
+                    <button type="button" onclick="openCreateModal()"
+                            class="primary-action dialog-confirm mt-5 inline-flex items-center gap-2 px-5 py-2.5 text-xs">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/>
+                        </svg>
+                        {% trans "Crear primer espacio" %}
+                    </button>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </section>
+</div>
+
+<!-- ===================================================================== -->
+<!-- Modal: Crear espacio de trabajo                                       -->
+<!-- ===================================================================== -->
+<div id="createWorkspaceModal" class="hidden fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-[rgba(3,10,22,0.72)] p-4 backdrop-blur-sm">
+    <div class="w-full max-w-lg rounded-[18px] border border-[var(--line)] bg-[var(--surface)] shadow-2xl">
+        <div class="flex items-start justify-between border-b border-[var(--line)] bg-[var(--surface-hover)] p-5">
+            <div class="flex items-center gap-2.5">
+                <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--blue-soft)] text-[var(--blue)]">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+                </span>
+                <div>
+                    <h3 class="text-sm font-semibold tracking-tight text-[var(--ink)]">{% trans "Nuevo espacio de trabajo" %}</h3>
+                    <p class="mt-0.5 text-[9px] text-[var(--muted)]">{% trans "Configura una temática independiente para tus documentos" %}</p>
+                </div>
+            </div>
+            <button type="button" onclick="closeCreateModal()" class="modal-close" aria-label="{% trans 'Cerrar' %}">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+
+        <form id="createWorkspaceForm" method="post" action="{% url 'workspace_create' %}" class="space-y-4 p-5">
+            {% csrf_token %}
+
+            <div class="form-field">
+                <span>{% trans "Nombre del espacio" %} <em class="not-italic text-[var(--red)]">*</em></span>
+                <input type="text" name="name" id="create_name" required
+                       placeholder="{% trans 'Ej: Contratos Legales 2026, Auditoría Médica...' %}"
+                       class="eli-input">
+            </div>
+
+            <div class="form-field">
+                <span>{% trans "Tipo de temática" %}</span>
+                <input type="text" name="project_type" id="create_project_type"
+                       placeholder="{% trans 'Ej: Legal, Médico, Financiero, Académico, Seguros...' %}"
+                       class="eli-input">
+                <div class="mt-2 flex flex-wrap items-center gap-1.5">
+                    <span class="text-[9px] text-[var(--faint)]">{% trans "Sugerencias:" %}</span>
+                    <button type="button" onclick="setProjectType('create', 'Corporativo')" class="workspace-type transition hover:border-[var(--blue)] hover:text-[var(--blue)]">Corporativo</button>
+                    <button type="button" onclick="setProjectType('create', 'Legal')" class="workspace-type transition hover:border-[var(--blue)] hover:text-[var(--blue)]">Legal</button>
+                    <button type="button" onclick="setProjectType('create', 'Médico')" class="workspace-type transition hover:border-[var(--blue)] hover:text-[var(--blue)]">Médico</button>
+                    <button type="button" onclick="setProjectType('create', 'Académico')" class="workspace-type transition hover:border-[var(--blue)] hover:text-[var(--blue)]">Académico</button>
+                    <button type="button" onclick="setProjectType('create', 'Financiero')" class="workspace-type transition hover:border-[var(--blue)] hover:text-[var(--blue)]">Financiero</button>
+                </div>
+            </div>
+
+            <div class="form-field">
+                <span>{% trans "Descripción (opcional)" %}</span>
+                <textarea name="description" id="create_description" rows="2"
+                          placeholder="{% trans 'Breve propósito de este espacio de trabajo...' %}"
+                          class="eli-input !leading-5"></textarea>
+            </div>
+
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div class="form-field">
+                    <span>{% trans "Icono" %}</span>
+                    <select name="icon" id="create_icon" class="eli-input">
+                        <option value="folder">{% trans "Carpeta" %}</option>
+                        <option value="building">{% trans "Empresa / Edificio" %}</option>
+                        <option value="scale">{% trans "Balanza / Legal" %}</option>
+                        <option value="medical">{% trans "Médico / Salud" %}</option>
+                        <option value="book">{% trans "Libro / Académico" %}</option>
+                        <option value="chart">{% trans "Gráficos / Finanzas" %}</option>
+                        <option value="document">{% trans "Documento" %}</option>
+                    </select>
+                </div>
+
+                <div class="form-field">
+                    <span>{% trans "Color temático" %}</span>
+                    <select name="color" id="create_color" class="eli-input">
+                        <option value="blue">{% trans "Azul Corporativo" %}</option>
+                        <option value="purple">{% trans "Púrpura Legal" %}</option>
+                        <option value="green">{% trans "Verde Salud/Finanzas" %}</option>
+                        <option value="amber">{% trans "Ámbar / Naranja" %}</option>
+                        <option value="indigo">{% trans "Índigo Académico" %}</option>
+                        <option value="red">{% trans "Rojo Regulatorio" %}</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="flex justify-end gap-2 border-t border-[var(--line)] pt-4">
+                <button type="button" onclick="closeCreateModal()" class="dialog-cancel">{% trans "Cancelar" %}</button>
+                <button type="submit" class="dialog-confirm">{% trans "Crear espacio" %}</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ===================================================================== -->
+<!-- Modal: Editar espacio de trabajo                                      -->
+<!-- ===================================================================== -->
+<div id="editWorkspaceModal" class="hidden fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-[rgba(3,10,22,0.72)] p-4 backdrop-blur-sm">
+    <div class="w-full max-w-lg rounded-[18px] border border-[var(--line)] bg-[var(--surface)] shadow-2xl">
+        <div class="flex items-start justify-between border-b border-[var(--line)] bg-[var(--surface-hover)] p-5">
+            <div class="flex items-center gap-2.5">
+                <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--blue-soft)] text-[var(--blue)]">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                </span>
+                <div>
+                    <h3 class="text-sm font-semibold tracking-tight text-[var(--ink)]">{% trans "Editar espacio de trabajo" %}</h3>
+                    <p class="mt-0.5 text-[9px] text-[var(--muted)]">{% trans "Actualiza la identidad y el color del espacio." %}</p>
+                </div>
+            </div>
+            <button type="button" onclick="closeEditModal()" class="modal-close" aria-label="{% trans 'Cerrar' %}">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+
+        <form id="editWorkspaceForm" onsubmit="submitEditWorkspace(event)" class="space-y-4 p-5">
+            <input type="hidden" id="edit_workspace_id">
+
+            <div class="form-field">
+                <span>{% trans "Nombre del espacio" %} <em class="not-italic text-[var(--red)]">*</em></span>
+                <input type="text" id="edit_name" required class="eli-input">
+            </div>
+
+            <div class="form-field">
+                <span>{% trans "Tipo de temática" %}</span>
+                <input type="text" id="edit_project_type" class="eli-input">
+            </div>
+
+            <div class="form-field">
+                <span>{% trans "Descripción" %}</span>
+                <textarea id="edit_description" rows="2" class="eli-input !leading-5"></textarea>
+            </div>
+
+            <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div class="form-field">
+                    <span>{% trans "Icono" %}</span>
+                    <select id="edit_icon" class="eli-input">
+                        <option value="folder">{% trans "Carpeta" %}</option>
+                        <option value="building">{% trans "Empresa / Edificio" %}</option>
+                        <option value="scale">{% trans "Balanza / Legal" %}</option>
+                        <option value="medical">{% trans "Médico / Salud" %}</option>
+                        <option value="book">{% trans "Libro / Académico" %}</option>
+                        <option value="chart">{% trans "Gráficos / Finanzas" %}</option>
+                        <option value="document">{% trans "Documento" %}</option>
+                    </select>
+                </div>
+
+                <div class="form-field">
+                    <span>{% trans "Color temático" %}</span>
+                    <select id="edit_color" class="eli-input">
+                        <option value="blue">{% trans "Azul Corporativo" %}</option>
+                        <option value="purple">{% trans "Púrpura Legal" %}</option>
+                        <option value="green">{% trans "Verde Salud/Finanzas" %}</option>
+                        <option value="amber">{% trans "Ámbar / Naranja" %}</option>
+                        <option value="indigo">{% trans "Índigo Académico" %}</option>
+                        <option value="red">{% trans "Rojo Regulatorio" %}</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="flex justify-end gap-2 border-t border-[var(--line)] pt-4">
+                <button type="button" onclick="closeEditModal()" class="dialog-cancel">{% trans "Cancelar" %}</button>
+                <button type="submit" class="dialog-confirm">{% trans "Guardar cambios" %}</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ===================================================================== -->
+<!-- Modal: Miembros del espacio                                           -->
+<!-- ===================================================================== -->
+<div id="membersModal" class="hidden fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-[rgba(3,10,22,0.72)] p-4 backdrop-blur-sm">
+    <div class="w-full max-w-2xl rounded-[18px] border border-[var(--line)] bg-[var(--surface)] shadow-2xl">
+        <div class="flex items-start justify-between border-b border-[var(--line)] bg-[var(--surface-hover)] p-5">
+            <div class="flex items-center gap-2.5">
+                <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--indigo-soft)] text-[var(--indigo)]">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                </span>
+                <div>
+                    <h3 class="text-sm font-semibold tracking-tight text-[var(--ink)]">{% trans "Miembros del espacio" %}</h3>
+                    <p class="mt-0.5 text-[9px] text-[var(--muted)]">
+                        {% trans "Personas con acceso a los datos de" %} <strong id="membersWorkspaceName" class="font-semibold text-[var(--ink)]"></strong>
+                    </p>
+                </div>
+            </div>
+            <button type="button" onclick="closeMembersModal()" class="modal-close" aria-label="{% trans 'Cerrar' %}">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+
+        <div class="space-y-3 p-5">
+            <p class="text-[10px] leading-5 text-[var(--muted)]">
+                {% trans "Solo las personas de esta lista pueden ver los reportes, empresas y listas de palabras del espacio. Añade a alguien para darle acceso y quítalo cuando ya no lo necesite." %}
+            </p>
+
+            <div id="membersList" class="max-h-72 divide-y divide-[var(--line)] overflow-y-auto rounded-[12px] border border-[var(--line)]"></div>
+
+            <p id="membersEmpty" class="hidden rounded-[12px] bg-[var(--surface-hover)] py-5 text-center text-[10px] text-[var(--muted)]">
+                {% trans "Nadie más tiene acceso a este espacio todavía." %}
+            </p>
+
+            <div class="border-t border-[var(--line)] pt-3">
+                <p class="mb-2 text-[8px] font-bold uppercase tracking-[0.13em] text-[var(--muted)]">{% trans "Dar acceso a un usuario" %}</p>
+                <div class="flex flex-col gap-2 sm:flex-row">
+                    <select id="memberUserSelect" aria-label="{% trans 'Usuario' %}" class="eli-input flex-1"></select>
+                    <select id="memberRoleSelect" aria-label="{% trans 'Rol' %}" class="eli-input sm:max-w-[12rem]"></select>
+                    <button type="button" onclick="addMember()" class="dialog-confirm inline-flex items-center justify-center gap-1.5 px-4 py-2.5">
+                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+                        {% trans "Añadir" %}
+                    </button>
+                </div>
+                <p id="membersNoUsers" class="mt-2 hidden text-[9px] text-[var(--faint)]">
+                    {% trans "No hay usuarios disponibles: todo el mundo ya tiene acceso." %}
+                </p>
+            </div>
+        </div>
+
+        <div class="flex justify-end border-t border-[var(--line)] p-4">
+            <button type="button" onclick="closeMembersModal()" class="dialog-cancel">{% trans "Cerrar" %}</button>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// --- Cadenas traducibles (viven en el .html para que makemessages las detecte) ---
+{% trans "¿Eliminar el espacio de trabajo “{name}”?" as msg_delete %}
+{% trans "Solo se pueden eliminar espacios vacíos: este no tiene reportes ni empresas, así que no se perderá ningún archivo." as msg_delete_body %}
+{% trans "¿Archivar el espacio de trabajo “{name}”?" as msg_archive %}
+{% trans "Se ocultará de la aplicación, pero NO se borrará ningún dato. Podrás restaurarlo cuando quieras." as msg_archive_body %}
+{% trans "¿Restaurar el espacio de trabajo “{name}”?" as msg_unarchive %}
+{% trans "No se pudo eliminar el espacio." as err_delete %}
+{% trans "No se pudo actualizar el espacio." as err_archive %}
+{% trans "Error de conexión." as err_conn %}
+const MSG_DELETE = "{{ msg_delete|escapejs }}";
+const MSG_DELETE_BODY = "{{ msg_delete_body|escapejs }}";
+const MSG_ARCHIVE = "{{ msg_archive|escapejs }}";
+const MSG_ARCHIVE_BODY = "{{ msg_archive_body|escapejs }}";
+const MSG_UNARCHIVE = "{{ msg_unarchive|escapejs }}";
+const ERR_DELETE = "{{ err_delete|escapejs }}";
+const ERR_ARCHIVE = "{{ err_archive|escapejs }}";
+const ERR_CONN = "{{ err_conn|escapejs }}";
+
+// --- Miembros (aprobación de acceso) ---
+{% trans "Administrador" as role_admin %}
+{% trans "Editor / Auditor" as role_editor %}
+{% trans "Lector" as role_viewer %}
+{% trans "Creador" as role_creator %}
+{% trans "Selecciona un usuario" as ph_user %}
+{% trans "Sin correo" as no_email %}
+{% trans "Quitar del espacio" as remove_title %}
+{% trans "¿Quitar a {user} de este espacio? Dejará de ver todos sus datos." as msg_remove_user %}
+{% trans "No se pudo cargar la lista de miembros." as err_members_load %}
+{% trans "No se pudo añadir al usuario." as err_member_add %}
+{% trans "No se pudo quitar al usuario." as err_member_remove %}
+{% trans "No se pudo cambiar el rol." as err_member_role %}
+const ROLE_LABELS = {
+    admin: "{{ role_admin|escapejs }}",
+    editor: "{{ role_editor|escapejs }}",
+    viewer: "{{ role_viewer|escapejs }}",
+};
+const ROLE_CREATOR = "{{ role_creator|escapejs }}";
+const PH_USER = "{{ ph_user|escapejs }}";
+const NO_EMAIL = "{{ no_email|escapejs }}";
+const REMOVE_TITLE = "{{ remove_title|escapejs }}";
+const MSG_REMOVE_USER = "{{ msg_remove_user|escapejs }}";
+const ERR_MEMBERS_LOAD = "{{ err_members_load|escapejs }}";
+const ERR_MEMBER_ADD = "{{ err_member_add|escapejs }}";
+const ERR_MEMBER_REMOVE = "{{ err_member_remove|escapejs }}";
+const ERR_MEMBER_ROLE = "{{ err_member_role|escapejs }}";
+
+let membersWorkspaceId = null;
+
+function openMembersModal(id, name) {
+    membersWorkspaceId = id;
+    document.getElementById("membersWorkspaceName").textContent = name;
+    document.getElementById("membersModal").classList.remove("hidden");
+    loadMembers();
+}
+
+function closeMembersModal() {
+    document.getElementById("membersModal").classList.add("hidden");
+    membersWorkspaceId = null;
+}
+
+async function loadMembers() {
+    try {
+        const response = await fetch(`/workspaces/${membersWorkspaceId}/members/`);
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+            alert(data.error || ERR_MEMBERS_LOAD);
+            return;
+        }
+        renderMembers(data);
+    } catch (err) {
+        alert(ERR_CONN);
+    }
+}
+
+function renderMembers(data) {
+    const list = document.getElementById("membersList");
+    list.replaceChildren();
+
+    data.members.forEach(m => {
+        const row = document.createElement("div");
+        row.className = "flex items-center justify-between gap-3 px-3.5 py-2.5";
+
+        const info = document.createElement("div");
+        info.className = "min-w-0";
+
+        const name = document.createElement("p");
+        name.className = "truncate text-xs font-semibold text-[var(--ink)]";
+        name.textContent = m.username + (m.es_creador ? " · " + ROLE_CREATOR : "");
+        info.appendChild(name);
+
+        const mail = document.createElement("p");
+        mail.className = "truncate text-[10px] text-[var(--muted)]";
+        mail.textContent = m.email || NO_EMAIL;
+        info.appendChild(mail);
+
+        const right = document.createElement("div");
+        right.className = "flex shrink-0 items-center gap-2";
+
+        if (m.puede_cambiar_rol) {
+            const sel = document.createElement("select");
+            sel.className = "rounded-lg border border-[var(--line)] bg-[var(--canvas)] px-2 py-1.5 text-[10px] text-[var(--ink)]";
+            sel.title = m.username;
+            data.roles.forEach(r => {
+                const opt = document.createElement("option");
+                opt.value = r.value;
+                opt.textContent = ROLE_LABELS[r.value] || r.label;
+                opt.selected = (r.value === m.role);
+                sel.appendChild(opt);
+            });
+            sel.addEventListener("change", () => changeMemberRole(m.user_id, sel.value));
+            right.appendChild(sel);
+        } else {
+            const badge = document.createElement("span");
+            badge.className = "rounded-full border border-[var(--line)] bg-[var(--indigo-soft)] px-2 py-1 text-[9px] font-semibold text-[var(--indigo)]";
+            badge.textContent = ROLE_LABELS[m.role] || m.role;
+            right.appendChild(badge);
+        }
+
+        if (m.puede_eliminar) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--line)] text-[var(--red)] transition hover:border-[var(--red)] hover:bg-[var(--red-soft)]";
+            btn.title = REMOVE_TITLE;
+            btn.innerHTML = '<svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>';
+            btn.addEventListener("click", () => removeMember(m.user_id, m.username));
+            right.appendChild(btn);
+        }
+
+        row.appendChild(info);
+        row.appendChild(right);
+        list.appendChild(row);
+    });
+
+    document.getElementById("membersEmpty").classList.toggle("hidden", data.members.length > 0);
+
+    const userSelect = document.getElementById("memberUserSelect");
+    userSelect.replaceChildren();
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = PH_USER;
+    userSelect.appendChild(placeholder);
+    data.available_users.forEach(u => {
+        const opt = document.createElement("option");
+        opt.value = u.id;
+        opt.textContent = u.email ? `${u.username} (${u.email})` : u.username;
+        userSelect.appendChild(opt);
+    });
+    document.getElementById("membersNoUsers").classList.toggle("hidden", data.available_users.length > 0);
+
+    const roleSelect = document.getElementById("memberRoleSelect");
+    roleSelect.replaceChildren();
+    data.roles.forEach(r => {
+        const opt = document.createElement("option");
+        opt.value = r.value;
+        opt.textContent = ROLE_LABELS[r.value] || r.label;
+        roleSelect.appendChild(opt);
+    });
+    roleSelect.value = "viewer";
+}
+
+async function postMemberAction(action, payload, error_message) {
+    try {
+        const response = await fetch(`/workspaces/${membersWorkspaceId}/members/${action}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCsrfToken(),
+            },
+            body: JSON.stringify(payload),
+        });
+        const data = await response.json();
+        if (response.ok && data.success) {
+            await loadMembers();
+        } else {
+            alert(data.error || error_message);
+        }
+    } catch (err) {
+        alert(ERR_CONN);
+    }
+}
+
+async function addMember() {
+    const userId = document.getElementById("memberUserSelect").value;
+    if (!userId) {
+        return;
+    }
+    const role = document.getElementById("memberRoleSelect").value;
+    await postMemberAction('add/', {user_id: userId, role: role}, ERR_MEMBER_ADD);
+}
+
+async function removeMember(userId, username) {
+    const question = MSG_REMOVE_USER.replace('{user}', username);
+    if (!confirm(question)) {
+        return;
+    }
+    await postMemberAction('remove/', {user_id: userId}, ERR_MEMBER_REMOVE);
+}
+
+async function changeMemberRole(userId, role) {
+    await postMemberAction('role/', {user_id: userId, role: role}, ERR_MEMBER_ROLE);
+}
+
+function openCreateModal() {
+    document.getElementById("createWorkspaceModal").classList.remove("hidden");
+    document.getElementById("create_name").focus();
+}
+
+function closeCreateModal() {
+    document.getElementById("createWorkspaceModal").classList.add("hidden");
+}
+
+function setProjectType(formPrefix, val) {
+    document.getElementById(formPrefix + "_project_type").value = val;
+}
+
+function openEditModal(id, name, desc, projectType, color, icon) {
+    document.getElementById("edit_workspace_id").value = id;
+    document.getElementById("edit_name").value = name;
+    document.getElementById("edit_description").value = desc;
+    document.getElementById("edit_project_type").value = projectType;
+    document.getElementById("edit_color").value = color;
+    document.getElementById("edit_icon").value = icon;
+    document.getElementById("editWorkspaceModal").classList.remove("hidden");
+}
+
+function closeEditModal() {
+    document.getElementById("editWorkspaceModal").classList.add("hidden");
+}
+
+function getCsrfToken() {
+    const cookie = document.cookie.split('; ').find(row => row.startsWith('csrftoken='));
+    return cookie ? cookie.split('=')[1] : '';
+}
+
+async function submitEditWorkspace(event) {
+    event.preventDefault();
+    const id = document.getElementById("edit_workspace_id").value;
+    const payload = {
+        name: document.getElementById("edit_name").value,
+        description: document.getElementById("edit_description").value,
+        project_type: document.getElementById("edit_project_type").value,
+        color: document.getElementById("edit_color").value,
+        icon: document.getElementById("edit_icon").value,
+    };
+
+    try {
+        const response = await fetch(`/workspaces/${id}/update/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCsrfToken(),
+            },
+            body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        if (response.ok && data.success) {
+            window.location.reload();
+        } else {
+            alert(data.error || (data.errors && data.errors.name ? data.errors.name[0] : 'Error al actualizar espacio'));
+        }
+    } catch (err) {
+        alert('Error de conexión al actualizar.');
+    }
+}
+
+async function confirmDeleteWorkspace(id, name) {
+    if (!confirm(MSG_DELETE.replace('{name}', name) + '\n\n' + MSG_DELETE_BODY.replace('{name}', name))) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/workspaces/${id}/delete/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCsrfToken(),
+            }
+        });
+        const data = await response.json();
+        if (response.ok && data.success) {
+            window.location.reload();
+        } else {
+            alert(data.error || ERR_DELETE);
+        }
+    } catch (err) {
+        alert(ERR_CONN);
+    }
+}
+
+async function toggleArchiveWorkspace(id, name, isArchived) {
+    const question = isArchived ? MSG_UNARCHIVE.replace('{name}', name)
+                                : (MSG_ARCHIVE.replace('{name}', name) + '\n\n' + MSG_ARCHIVE_BODY);
+    if (!confirm(question)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/workspaces/${id}/archive/`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCsrfToken(),
+            }
+        });
+        const data = await response.json();
+        if (response.ok && data.success) {
+            window.location.reload();
+        } else {
+            alert(data.error || ERR_ARCHIVE);
+        }
+    } catch (err) {
+        alert(ERR_CONN);
+    }
+}
+
+// --- Menús desplegables de acciones por fila ---
+function toggleWorkspaceDropdown(event, dropdownId) {
+    event.stopPropagation();
+    const targetDropdown = document.getElementById(dropdownId);
+    if (!targetDropdown) return;
+
+    const isOpen = targetDropdown.classList.contains('is-open');
+    closeAllWorkspaceDropdowns();
+    if (isOpen) return;
+
+    targetDropdown.classList.add('is-open');
+    const row = targetDropdown.closest('.workspace-row');
+    if (row) {
+        row.classList.add('menu-open');
+    }
+
+    // Detectar si queda poco espacio inferior en el viewport y abrir hacia arriba
+    const rect = targetDropdown.getBoundingClientRect();
+    if (rect.bottom > window.innerHeight - 16) {
+        targetDropdown.classList.add('open-upwards');
+    } else {
+        targetDropdown.classList.remove('open-upwards');
+    }
+}
+
+function closeAllWorkspaceDropdowns() {
+    document.querySelectorAll('.workspace-menu-dropdown.is-open').forEach(menu => {
+        menu.classList.remove('is-open');
+        menu.classList.remove('open-upwards');
+    });
+    document.querySelectorAll('.workspace-row.menu-open').forEach(row => {
+        row.classList.remove('menu-open');
+    });
+}
+
+document.addEventListener('click', () => {
+    closeAllWorkspaceDropdowns();
+});
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        closeAllWorkspaceDropdowns();
+        closeCreateModal();
+        closeEditModal();
+        closeMembersModal();
+    }
+});
+</script>
+{% endblock %}

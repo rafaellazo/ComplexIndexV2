@@ -1,3 +1,1486 @@
-from django.test import TestCase
+import json
 
-# Create your tests here.
+from django.db.models import ProtectedError
+from django.test import TestCase, Client, modify_settings
+from django.contrib.auth.models import User
+from django.urls import reverse
+from Counter.models import (
+    Company, Report, TotalCount, TotalCountReport,
+    ConcealmentReview, ConcealmentParagraphReview,
+    Workspace, WorkspaceMembership, ExpertWord,
+)
+from User.models import Expert
+
+
+class ConcealmentDetectionFilterTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='testauditor', password='password123')
+        self.client = Client()
+        self.client.login(username='testauditor', password='password123')
+
+        # Todos los datos viven en un espacio de trabajo (campo obligatorio).
+        self.ws = Workspace.objects.create(name='Espacio de Auditoría', created_by=self.user)
+
+        self.company1 = Company.objects.create(workspace=self.ws, name='EMPRESA ALFA S.A.', ruc='0990000001001')
+        self.company2 = Company.objects.create(workspace=self.ws, name='EMPRESA BETA S.A.', ruc='0990000002001')
+
+        self.report1 = Report.objects.create(
+            workspace=self.ws,
+            company=self.company1,
+            name='2024',
+            year=2024
+        )
+        self.report2 = Report.objects.create(
+            workspace=self.ws,
+            company=self.company2,
+            name='2024',
+            year=2024
+        )
+
+        TotalCountReport.objects.create(report=self.report1, word='ingresos', quantity=10)
+        TotalCountReport.objects.create(report=self.report2, word='gastos', quantity=5)
+
+    def test_filter_labels_present(self):
+        response = self.client.get(reverse('concealment_detection'))
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode('utf-8')
+        self.assertIn('Año del reporte', content)
+        self.assertIn('Selecciona una empresa:', content)
+
+    def test_filter_persistence_on_search(self):
+        url = f"{reverse('concealment_detection')}?year=2024&report_id={self.report2.id}&origen_palabras=reporte&palabra=gastos"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(response.context['selected_year'], '2024')
+        self.assertEqual(response.context['selected_report'].id, self.report2.id)
+        self.assertEqual(response.context['palabra'], 'gastos')
+
+        content = response.content.decode('utf-8')
+        self.assertIn('value="2024"', content)
+        self.assertIn(f'value="{self.report2.id}" selected', content)
+        self.assertIn('EMPRESA BETA S.A.', content)
+
+    def test_get_reports_by_year_ajax(self):
+        url = reverse('get_reports_by_year') + '?year=2024'
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(len(data), 2)
+        names = [item['name'] for item in data]
+        self.assertIn('EMPRESA ALFA S.A.', names)
+        self.assertIn('EMPRESA BETA S.A.', names)
+
+    def test_company_ordering_ignores_leading_whitespace(self):
+        # Create a company with a leading space that starts with 'Z'
+        # Without Trim, ASCII space (32) would sort it before 'EMPRESA ALFA S.A.' (65)
+        company_z = Company.objects.create(workspace=self.ws, name=' ZETA S.A.', ruc='0990000003001')
+        report_z = Report.objects.create(workspace=self.ws, company=company_z, name='2024', year=2024)
+
+        url = reverse('concealment_detection') + '?year=2024'
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+        reports = list(response.context['reports'])
+        # EMPRESA ALFA must come first, not ' ZETA S.A.'
+        self.assertEqual(reports[0].clean_company, 'EMPRESA ALFA S.A.')
+        self.assertEqual(reports[-1].clean_company, 'ZETA S.A.')
+
+        # Also check AJAX endpoint
+        ajax_url = reverse('get_reports_by_year') + '?year=2024'
+        ajax_resp = self.client.get(ajax_url)
+        self.assertEqual(ajax_resp.status_code, 200)
+        ajax_data = ajax_resp.json()
+        self.assertEqual(ajax_data[0]['name'], 'EMPRESA ALFA S.A.')
+        self.assertEqual(ajax_data[-1]['name'], 'ZETA S.A.')
+
+    def test_concealment_review_records_user_and_history(self):
+        # 1. Create a review via POST
+        post_data = {
+            'report_id': self.report1.id,
+            'palabra': 'ingresos',
+            'parrafos_validos': ['0'],
+        }
+        resp = self.client.post(reverse('concealment_detection'), post_data)
+        self.assertEqual(resp.status_code, 200)
+
+        # Verify ConcealmentReview saved with request.user
+        review = ConcealmentReview.objects.filter(report=self.report1, word='ingresos').latest('reviewed_at')
+        self.assertEqual(review.user, self.user)
+        self.assertEqual(review.total_valid, 0) # paragraph counts depends on find_paragraph mock/file, but record exists
+
+        # 2. Test GET shows recent_reviews
+        get_url = f"{reverse('concealment_detection')}?year=2024&report_id={self.report1.id}&palabra=ingresos"
+        get_resp = self.client.get(get_url)
+        self.assertEqual(get_resp.status_code, 200)
+        self.assertIn('recent_reviews', get_resp.context)
+        self.assertGreaterEqual(len(get_resp.context['recent_reviews']), 1)
+        self.assertEqual(get_resp.context['recent_reviews'][0].user, self.user)
+
+    def test_concealment_history_view_and_filters(self):
+        # Create a sample review
+        rev = ConcealmentReview.objects.create(
+            report=self.report2,
+            user=self.user,
+            word='gastos',
+            total_found=5,
+            total_valid=3,
+            total_discarded=2
+        )
+        ConcealmentParagraphReview.objects.create(
+            review=rev,
+            paragraph_text='Parrafo sobre gastos operacionales.',
+            occurrences=3,
+            discarded=False
+        )
+        ConcealmentParagraphReview.objects.create(
+            review=rev,
+            paragraph_text='Parrafo no relevante con gastos.',
+            occurrences=2,
+            discarded=True
+        )
+
+        # Test history view status
+        history_url = reverse('concealment_history')
+        resp = self.client.get(history_url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Historial de Auditoría')
+        self.assertContains(resp, 'gastos')
+        self.assertContains(resp, self.user.username)
+
+        # Test filter by year
+        resp_year = self.client.get(history_url + '?year=2024')
+        self.assertEqual(resp_year.status_code, 200)
+        self.assertEqual(len(resp_year.context['reviews']), 1)
+        self.assertIn(self.company2, resp_year.context['companies'])
+
+        # Test filter by year + company ID
+        resp_year_company = self.client.get(f'{history_url}?year=2024&company={self.company2.id}')
+        self.assertEqual(resp_year_company.status_code, 200)
+        self.assertEqual(len(resp_year_company.context['reviews']), 1)
+
+        # Test filter by year + other company with no reviews
+        resp_other_company = self.client.get(f'{history_url}?year=2024&company={self.company1.id}')
+        self.assertEqual(resp_other_company.status_code, 200)
+        self.assertEqual(len(resp_other_company.context['reviews']), 0)
+
+        # Test filter by non-existent year
+        resp_wrong_year = self.client.get(history_url + '?year=2020')
+        self.assertEqual(resp_wrong_year.status_code, 200)
+        self.assertEqual(len(resp_wrong_year.context['reviews']), 0)
+
+        # Test filter by auditor
+        resp_auditor = self.client.get(history_url + f'?user={self.user.username}')
+        self.assertEqual(resp_auditor.status_code, 200)
+        self.assertEqual(len(resp_auditor.context['reviews']), 1)
+
+        # Test filter by word
+        resp_word = self.client.get(history_url + '?word=gastos')
+        self.assertEqual(resp_word.status_code, 200)
+        self.assertEqual(len(resp_word.context['reviews']), 1)
+
+        # Test filter by non-existent word
+        resp_none = self.client.get(history_url + '?word=noexiste')
+        self.assertEqual(len(resp_none.context['reviews']), 0)
+
+        # Test AJAX detail endpoint
+        detail_url = reverse('concealment_history_detail', args=[rev.id])
+        detail_resp = self.client.get(detail_url)
+        self.assertEqual(detail_resp.status_code, 200)
+        json_data = detail_resp.json()
+        self.assertEqual(json_data['word'], 'gastos')
+        self.assertEqual(json_data['user'], self.user.username)
+        self.assertEqual(len(json_data['paragraphs']), 2)
+        self.assertEqual(json_data['paragraphs'][0]['discarded'], False)
+        self.assertEqual(json_data['paragraphs'][1]['discarded'], True)
+
+
+class ComparativeAnalysisTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='analyst', password='password')
+        self.client.login(username='analyst', password='password')
+        self.ws = Workspace.objects.create(name='Espacio Análisis', created_by=self.user)
+        self.company = Company.objects.create(workspace=self.ws, name='ACME CORP S.A.', ruc='0990000004001')
+        self.report = Report.objects.create(
+            workspace=self.ws,
+            company=self.company,
+            name='2024',
+            year=2024
+        )
+
+    def test_reports_by_year_returns_company_name(self):
+        url = reverse('reports_by_year') + '?year=2024'
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]['id'], self.report.id)
+        # Verify it does not just return '2024'
+        self.assertEqual(data[0]['name'], 'ACME CORP S.A.')
+
+    def test_comparative_form_report_label_shows_company(self):
+        from Counter.forms import ComparativeAnalysisForm
+        form = ComparativeAnalysisForm(data={'year': '2024'}, workspace=self.ws)
+        choices = list(form.fields['report'].choices)
+        # First choice is the empty label
+        self.assertEqual(choices[0][0], '')
+        # Second choice should have ACME CORP S.A. as label
+        self.assertEqual(choices[1][0], self.report.id)
+        self.assertEqual(choices[1][1], 'ACME CORP S.A.')
+
+    def test_comparative_analysis_view_renders(self):
+        url = reverse('comparative_analysis')
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Análisis comparativo')
+        self.assertContains(response, 'Comparar reporte con lista de experto')
+        self.assertContains(response, 'Evolución Interanual')
+
+    def test_reports_by_company_endpoint(self):
+        url = reverse('reports_by_company') + f'?company_id={self.company.id}'
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]['id'], self.report.id)
+        self.assertEqual(data[0]['year'], 2024)
+
+    def test_interannual_comparison_flow(self):
+        report_2023 = Report.objects.create(
+            workspace=self.ws,
+            company=self.company,
+            name='2023',
+            year=2023
+        )
+        # 2023 words: 'ingresos' (5), 'antiguo' (2)
+        TotalCountReport.objects.create(report=report_2023, word='ingresos', quantity=5)
+        TotalCountReport.objects.create(report=report_2023, word='antiguo', quantity=2)
+
+        # 2024 words: 'ingresos' (8), 'nuevo' (4)
+        TotalCountReport.objects.create(report=self.report, word='ingresos', quantity=8)
+        TotalCountReport.objects.create(report=self.report, word='nuevo', quantity=4)
+
+        url = reverse('comparative_analysis')
+        post_data = {
+            'modo': 'interanual',
+            'company_id': self.company.id,
+            'report_a_id': report_2023.id,
+            'report_b_id': self.report.id,
+        }
+        response = self.client.post(url, post_data)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('resultado_interanual', response.context)
+        res = response.context['resultado_interanual']
+        self.assertIsNotNone(res)
+        self.assertEqual(res['comunes'], ['ingresos'])
+        self.assertEqual(res['solo_a'], ['antiguo']) # Omitido en 2024
+        self.assertEqual(res['solo_b'], ['nuevo'])   # Nuevo en 2024
+        self.assertContains(response, 'Evolución interanual detectada')
+
+
+class ReportSearchTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='admin_reports', password='password')
+        self.client.login(username='admin_reports', password='password')
+        self.ws = Workspace.objects.create(name='Espacio Reportes', created_by=self.user)
+        self.company1 = Company.objects.create(workspace=self.ws, name='ALPHA LOGISTICS S.A.', ruc='0990000005001')
+        self.company2 = Company.objects.create(workspace=self.ws, name='OMEGA HOLDINGS S.A.', ruc='0990000006001')
+        self.rep1 = Report.objects.create(workspace=self.ws, company=self.company1, name='Memoria Anual 2024', year=2024)
+        self.rep2 = Report.objects.create(workspace=self.ws, company=self.company2, name='Balance 2023', year=2023)
+
+    def test_search_reports_by_name(self):
+        url = reverse('reports') + '?q=Memoria'
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, f'id="reporte-{self.rep1.id}"')
+        self.assertNotContains(resp, f'id="reporte-{self.rep2.id}"')
+
+    def test_search_reports_by_company(self):
+        url = reverse('reports') + '?q=OMEGA'
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, f'id="reporte-{self.rep2.id}"')
+        self.assertNotContains(resp, f'id="reporte-{self.rep1.id}"')
+
+    def test_search_reports_no_results(self):
+        url = reverse('reports') + '?q=Inexistente'
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'No se encontraron reportes que coincidan con')
+        self.assertNotContains(resp, f'id="reporte-{self.rep1.id}"')
+        self.assertNotContains(resp, f'id="reporte-{self.rep2.id}"')
+
+
+class PanelViewTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='paneluser', password='password123')
+        self.client = Client()
+
+    def test_panel_requires_login(self):
+        resp = self.client.get(reverse('panel'))
+        self.assertEqual(resp.status_code, 302)
+
+    def test_panel_authenticated_renders(self):
+        # Necesita un espacio: sin él, el panel redirige a la pantalla de espacios.
+        Workspace.objects.create(name='Espacio Panel', created_by=self.user)
+        self.client.login(username='paneluser', password='password123')
+        resp = self.client.get(reverse('panel'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Observatorio')
+        self.assertContains(resp, 'Empresas')
+        self.assertContains(resp, 'Reportes')
+
+
+class UploadModuleTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='uploaduser', password='password123')
+        self.client.login(username='uploaduser', password='password123')
+        self.ws = Workspace.objects.create(name='Espacio Subida', created_by=self.user)
+        self.company = Company.objects.create(workspace=self.ws, name='BETA CORP S.A.', ruc='0990000007001')
+
+    def test_upload_view_requires_login(self):
+        self.client.logout()
+        resp = self.client.get(reverse('upload'))
+        self.assertEqual(resp.status_code, 302)
+
+    def test_upload_view_renders_correctly(self):
+        resp = self.client.get(reverse('upload'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Subida y Procesamiento de Reportes')
+        self.assertContains(resp, 'Subir Reporte Individual (PDF)')
+        self.assertContains(resp, 'Subir Múltiples Reportes (Lote ZIP)')
+        self.assertContains(resp, 'Sobrescribir si ya existe')
+
+    def test_form_rejects_non_pdf_file(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from Counter.forms import IndividualReportUploadForm
+
+        fake_txt = SimpleUploadedFile("documento.txt", b"Texto plano de prueba", content_type="text/plain")
+        form = IndividualReportUploadForm(
+            data={"company": self.company.id, "year": 2024},
+            files={"file": fake_txt},
+            workspace=self.ws
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("file", form.errors)
+        self.assertIn("PDF", form.errors["file"][0])
+
+    def test_form_rejects_invalid_pdf_header(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from Counter.forms import IndividualReportUploadForm
+
+        fake_pdf = SimpleUploadedFile("falso.pdf", b"NO ES UN PDF REAL", content_type="application/pdf")
+        form = IndividualReportUploadForm(
+            data={"company": self.company.id, "year": 2024},
+            files={"file": fake_pdf},
+            workspace=self.ws
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("file", form.errors)
+
+    def test_form_detects_duplicate_company_year_without_overwrite(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from Counter.forms import IndividualReportUploadForm
+
+        # Create existing report
+        Report.objects.create(workspace=self.ws, company=self.company, year=2024, name="Existente 2024")
+
+        valid_pdf_content = b"%PDF-1.4\n%trailer\n%%EOF"
+        pdf_file = SimpleUploadedFile("nuevo.pdf", valid_pdf_content, content_type="application/pdf")
+
+        form = IndividualReportUploadForm(
+            data={"company": self.company.id, "year": 2024, "overwrite": False},
+            files={"file": pdf_file},
+            workspace=self.ws
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("Ya existe un reporte registrado", str(form.errors))
+
+    def test_form_allows_duplicate_company_year_with_overwrite(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        from Counter.forms import IndividualReportUploadForm
+
+        Report.objects.create(workspace=self.ws, company=self.company, year=2024, name="Existente 2024")
+
+        valid_pdf_content = b"%PDF-1.4\n%trailer\n%%EOF"
+        pdf_file = SimpleUploadedFile("nuevo.pdf", valid_pdf_content, content_type="application/pdf")
+
+        form = IndividualReportUploadForm(
+            data={"company": self.company.id, "year": 2024, "overwrite": True},
+            files={"file": pdf_file},
+            workspace=self.ws
+        )
+        self.assertTrue(form.is_valid())
+
+    def test_delete_report_decrements_total_count(self):
+        from Counter.models import TotalCount, TotalCountReport
+
+        report = Report.objects.create(workspace=self.ws, company=self.company, year=2024, name="Reporte Prueba")
+        TotalCountReport.objects.create(report=report, word="palabraprueba", quantity=15)
+        TotalCount.objects.create(workspace=self.ws, word="palabraprueba", quantity=15)
+
+        # Ensure TotalCount starts at 15
+        self.assertEqual(TotalCount.objects.get(word="palabraprueba").quantity, 15)
+
+        # Delete the report via endpoint
+        del_resp = self.client.delete(reverse('delete_report', args=[report.id]))
+        self.assertEqual(del_resp.status_code, 204)
+
+        # TotalCount record should now be deleted since total quantity is 0
+        self.assertFalse(TotalCount.objects.filter(word="palabraprueba").exists())
+
+
+class InternationalizationTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.user = User.objects.create_superuser(
+            username='admin_i18n',
+            email='admin@example.com',
+            password='AdminPassword123!'
+        )
+
+    def test_default_language_is_spanish(self):
+        self.client.login(username='admin_i18n', password='AdminPassword123!')
+        response = self.client.get(reverse('panel'))
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode('utf-8')
+        self.assertIn('Observatorio', content)
+        self.assertIn('Empresas', content)
+        self.assertIn('Reportes', content)
+
+    def test_switch_language_to_english_and_render_translated_content(self):
+        self.client.login(username='admin_i18n', password='AdminPassword123!')
+        # Post to set_language
+        setlang_url = reverse('set_language')
+        response = self.client.post(setlang_url, {'language': 'en', 'next': reverse('panel')})
+        self.assertEqual(response.status_code, 302)
+
+        # Get panel with the cookie set
+        panel_resp = self.client.get(reverse('panel'))
+        self.assertEqual(panel_resp.status_code, 200)
+        content = panel_resp.content.decode('utf-8')
+        self.assertIn('Dashboard', content)
+        self.assertIn('Companies', content)
+        self.assertIn('Reports', content)
+
+    def test_switch_language_back_to_spanish(self):
+        self.client.login(username='admin_i18n', password='AdminPassword123!')
+        setlang_url = reverse('set_language')
+        # First switch to EN
+        self.client.post(setlang_url, {'language': 'en', 'next': reverse('panel')})
+        # Then switch back to ES
+        self.client.post(setlang_url, {'language': 'es', 'next': reverse('panel')})
+
+        panel_resp = self.client.get(reverse('panel'))
+        content = panel_resp.content.decode('utf-8')
+        self.assertIn('Observatorio', content)
+        self.assertIn('Empresas', content)
+
+    def test_all_modules_rendered_in_english(self):
+        self.client.login(username='admin_i18n', password='AdminPassword123!')
+        self.client.post(reverse('set_language'), {'language': 'en', 'next': reverse('panel')})
+
+        # Landing page
+        resp = self.client.get(reverse('index'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('Comprehensive Audit & Contract Complexity Platform', resp.content.decode('utf-8'))
+
+        # Companies
+        resp = self.client.get(reverse('companies'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('Company Directory', resp.content.decode('utf-8'))
+
+        # Total count
+        resp = self.client.get(reverse('totalcount'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('Consolidated Lexical Frequency & Distribution', resp.content.decode('utf-8'))
+
+        # Concealment detection
+        resp = self.client.get(reverse('concealment_detection'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('Information Concealment Detector', resp.content.decode('utf-8'))
+
+        # Concealment history
+        resp = self.client.get(reverse('concealment_history'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('Concealment Audit History', resp.content.decode('utf-8'))
+
+        # Expert lists
+        resp = self.client.get(reverse('expert_lists'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('Vocabularies and Control Lists', resp.content.decode('utf-8'))
+
+        # Comparative analysis
+        resp = self.client.get(reverse('comparative_analysis'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('Comparative Vocabulary Analysis', resp.content.decode('utf-8'))
+
+        # Profile
+        resp = self.client.get(reverse('profile'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('User Profile', resp.content.decode('utf-8'))
+
+        # Upload
+        resp = self.client.get(reverse('upload'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('Upload Individual Report (PDF)', resp.content.decode('utf-8'))
+
+        # Users
+        resp = self.client.get(reverse('users'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('User Management', resp.content.decode('utf-8'))
+
+
+class WorkspaceIsolationTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='test_ws_user', password='password123', is_staff=True)
+        self.client = Client()
+        self.client.login(username='test_ws_user', password='password123')
+
+        from Counter.models import Workspace, WorkspaceMembership
+        self.ws1 = Workspace.objects.create(
+            name="Espacio Corporativo",
+            project_type="Corporativo",
+            created_by=self.user
+        )
+        WorkspaceMembership.objects.create(workspace=self.ws1, user=self.user, role="admin")
+
+        self.ws2 = Workspace.objects.create(
+            name="Espacio Legal",
+            project_type="Legal",
+            created_by=self.user
+        )
+        WorkspaceMembership.objects.create(workspace=self.ws2, user=self.user, role="admin")
+
+        # Compañías en cada workspace
+        self.comp_ws1 = Company.objects.create(name="Empresa Corp 1", ruc="11111111111", workspace=self.ws1)
+        self.comp_ws2 = Company.objects.create(name="Firma Legal 2", ruc="22222222222", workspace=self.ws2)
+
+        # Reportes en cada workspace
+        self.rep_ws1 = Report.objects.create(name="Reporte Corp", year=2024, company=self.comp_ws1, workspace=self.ws1, total_words=100)
+        self.rep_ws2 = Report.objects.create(name="Contrato Legal", year=2024, company=self.comp_ws2, workspace=self.ws2, total_words=200)
+
+        # Palabras de conteo
+        from Counter.models import TotalCount
+        TotalCount.objects.create(workspace=self.ws1, word="dividendo", quantity=25)
+        TotalCount.objects.create(workspace=self.ws2, word="clausula", quantity=40)
+
+    def test_workspaces_list_view(self):
+        resp = self.client.get(reverse('workspaces_list'))
+        self.assertEqual(resp.status_code, 200)
+        content = resp.content.decode('utf-8')
+        self.assertIn('Espacio Corporativo', content)
+        self.assertIn('Espacio Legal', content)
+        self.assertIn('Corporativo', content)
+        self.assertIn('Legal', content)
+        # Verificación del rediseño ELI / Figma:
+        self.assertIn('workspace-overview', content)
+        self.assertIn('workspace-current', content)
+        self.assertIn('workspace-stat-grid', content)
+        self.assertIn('total_workspaces', resp.context)
+        self.assertEqual(resp.context['total_workspaces'], 2)
+        self.assertIsNotNone(resp.context['active_workspace_data'])
+        self.assertEqual(resp.context['active_workspace_data']['reports_count'], 1)
+        self.assertEqual(resp.context['active_workspace_data']['companies_count'], 1)
+
+    def test_workspace_monogram_and_color_tone(self):
+        ws_audit = Workspace.objects.create(name="Auditoría Regional 2026", color="purple")
+        ws_single = Workspace.objects.create(name="Finanzas", color="green")
+        ws_stopwords = Workspace.objects.create(name="Centro de Investigaciones", color="amber")
+
+        self.assertEqual(ws_audit.monogram, "AR")
+        self.assertEqual(ws_audit.color_tone, "violet")
+
+        self.assertEqual(ws_single.monogram, "FI")
+        self.assertEqual(ws_single.color_tone, "cyan")
+
+        self.assertEqual(ws_stopwords.monogram, "CI")
+        self.assertEqual(ws_stopwords.color_tone, "amber")
+
+    def test_workspace_select_and_filtering(self):
+        # Seleccionar Workspace 1
+        resp = self.client.get(reverse('workspace_select', args=[self.ws1.id]))
+        self.assertEqual(resp.status_code, 302)
+        session = self.client.session
+        self.assertEqual(session.get('active_workspace_id'), self.ws1.id)
+
+        # Ver panel de Workspace 1
+        resp_panel = self.client.get(reverse('panel'))
+        self.assertEqual(resp_panel.status_code, 200)
+        self.assertEqual(resp_panel.context['total_reports'], 1)
+        self.assertEqual(resp_panel.context['total_companies'], 1)
+
+        # Ver empresas de Workspace 1
+        resp_comp = self.client.get(reverse('companies'))
+        self.assertEqual(resp_comp.status_code, 200)
+        content_comp = resp_comp.content.decode('utf-8')
+        self.assertIn('Empresa Corp 1', content_comp)
+        self.assertNotIn('Firma Legal 2', content_comp)
+
+        # Ver reportes de Workspace 1
+        resp_rep = self.client.get(reverse('reports'))
+        self.assertEqual(resp_rep.status_code, 200)
+        content_rep = resp_rep.content.decode('utf-8')
+        self.assertIn('Reporte Corp', content_rep)
+        self.assertNotIn('Contrato Legal', content_rep)
+
+        # Cambiar a Workspace 2
+        resp = self.client.get(reverse('workspace_select', args=[self.ws2.id]))
+        self.assertEqual(resp.status_code, 302)
+
+        # Ver empresas de Workspace 2
+        resp_comp2 = self.client.get(reverse('companies'))
+        self.assertEqual(resp_comp2.status_code, 200)
+        content_comp2 = resp_comp2.content.decode('utf-8')
+        self.assertIn('Firma Legal 2', content_comp2)
+        self.assertNotIn('Empresa Corp 1', content_comp2)
+
+        # Ver reportes de Workspace 2
+        resp_rep2 = self.client.get(reverse('reports'))
+        self.assertEqual(resp_rep2.status_code, 200)
+        content_rep2 = resp_rep2.content.decode('utf-8')
+        self.assertIn('Contrato Legal', content_rep2)
+        self.assertNotIn('Reporte Corp', content_rep2)
+
+    def test_create_workspace_via_post(self):
+        post_data = {
+            'name': 'Auditoría Médica 2026',
+            'project_type': 'Salud / Médico',
+            'description': 'Análisis de historias clínicas',
+            'color': 'green',
+            'icon': 'medical'
+        }
+        resp = self.client.post(reverse('workspace_create'), post_data)
+        self.assertEqual(resp.status_code, 302)
+
+        from Counter.models import Workspace
+        ws_created = Workspace.objects.filter(name='Auditoría Médica 2026').first()
+        self.assertIsNotNone(ws_created)
+        self.assertEqual(ws_created.project_type, 'Salud / Médico')
+        self.assertEqual(ws_created.color, 'green')
+        self.assertEqual(ws_created.icon, 'medical')
+
+
+
+class ExpertListWorkspaceIsolationTests(TestCase):
+    """Las listas de palabras de los expertos deben ser únicas y aisladas por espacio."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='listas_ws', password='password123', is_staff=True
+        )
+        self.client = Client()
+        self.client.login(username='listas_ws', password='password123')
+
+        self.ws1 = Workspace.objects.create(name='Espacio Listas 1', created_by=self.user)
+        self.ws2 = Workspace.objects.create(name='Espacio Listas 2', created_by=self.user)
+
+        expert_user = User.objects.create_user(username='expert1', password='x')
+        self.expert = Expert.objects.create(user=expert_user, profession='Ingeniero')
+
+    def _seleccionar(self, ws):
+        self.client.get(reverse('workspace_select', args=[ws.id]))
+
+    def _post_json(self, url, payload):
+        return self.client.post(url, json.dumps(payload), content_type='application/json')
+
+    def _crear(self, nombre, palabras=None):
+        return self._post_json(reverse('create_expert_list'), {
+            'expert_id': self.expert.id,
+            'name': nombre,
+            'words': palabras or ['ingresos', 'pasivos'],
+        })
+
+    def test_mismo_nombre_permitido_en_espacios_distintos(self):
+        self._seleccionar(self.ws1)
+        r1 = self._crear('Común')
+        self.assertEqual(r1.status_code, 200, r1.content)
+        self.assertTrue(r1.json()['success'])
+
+        # Mismo nombre, otro espacio: debe permitirse
+        self._seleccionar(self.ws2)
+        r2 = self._crear('Común')
+        self.assertEqual(r2.status_code, 200, r2.content)
+        self.assertTrue(r2.json()['success'])
+
+        self.assertEqual(ExpertWord.objects.filter(name='Común').count(), 2)
+
+    def test_nombre_duplicado_en_el_mismo_espacio_rechazado(self):
+        self._seleccionar(self.ws1)
+        self.assertEqual(self._crear('Duplicada').status_code, 200)
+        repetida = self._crear('Duplicada')
+        self.assertEqual(repetida.status_code, 400)
+        self.assertEqual(ExpertWord.objects.filter(workspace=self.ws1, name='Duplicada').count(), 1)
+
+    def test_no_puede_leer_editar_borrar_lista_de_otro_espacio(self):
+        self._seleccionar(self.ws1)
+        lista_id = self._crear('Solo del ws1').json()['id']
+
+        # Cambio al otro espacio: la lista de ws1 no debe ser visible ni manipulable
+        self._seleccionar(self.ws2)
+        self.assertEqual(
+            self.client.get(reverse('get_list_json', args=[lista_id])).status_code, 404
+        )
+        self.assertEqual(
+            self._post_json(reverse('update_expert_list', args=[lista_id]),
+                            {'name': 'Robada', 'words': ['x']}).status_code, 404
+        )
+        self.assertEqual(
+            self._post_json(reverse('delete_expert_list', args=[lista_id]), {}).status_code, 404
+        )
+        self.assertTrue(ExpertWord.objects.filter(id=lista_id, name='Solo del ws1').exists())
+
+        # Vuelvo a ws1: sigue ahí y ahora sí se puede editar
+        self._seleccionar(self.ws1)
+        ok = self._post_json(reverse('update_expert_list', args=[lista_id]),
+                             {'name': 'Renombrada', 'words': ['y']})
+        self.assertEqual(ok.status_code, 200, ok.content)
+
+    def test_listado_solo_muestra_listas_del_espacio_activo(self):
+        self._seleccionar(self.ws1)
+        self._crear('FiltroWs1')
+        self._seleccionar(self.ws2)
+        self._crear('FiltroWs2')
+
+        self._seleccionar(self.ws1)
+        resp = self.client.get(reverse('expert_lists'))
+        self.assertEqual(resp.status_code, 200)
+        content = resp.content.decode('utf-8')
+        self.assertIn('FiltroWs1', content)
+        self.assertNotIn('FiltroWs2', content)
+
+    def test_vocab_monogram_and_clean_words(self):
+        """Verifica el cálculo de monogramas circulares y lista limpia de términos."""
+        lista = ExpertWord(
+            name="Terminología legal corporativa",
+            words=["fraude", "confidencial", "riesgo", "soborno"]
+        )
+        self.assertEqual(lista.monogram, "TL")
+        self.assertEqual(lista.clean_words, ["fraude", "confidencial", "riesgo", "soborno"])
+        self.assertEqual(lista.raw_terms_string, "fraude, confidencial, riesgo, soborno")
+
+    def test_get_list_json_returns_clean_terms(self):
+        self._seleccionar(self.ws1)
+        res = self._crear('Vocabulario Legal', palabras=['secreto', 'contrato'])
+        lista_id = res.json()['id']
+        resp = self.client.get(reverse('get_list_json', args=[lista_id]))
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data['name'], 'Vocabulario Legal')
+        self.assertEqual(data['words'], ['secreto', 'contrato'])
+        self.assertEqual(data['raw_terms_string'], 'secreto, contrato')
+
+
+class WorkspaceDeletionSafetyTests(TestCase):
+    """Nunca se debe poder borrar un espacio con contenido (reportes, empresas, PDFs)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='seguridad_ws', password='password123', is_staff=True
+        )
+        self.client = Client()
+        self.client.login(username='seguridad_ws', password='password123')
+
+        self.ws_vacio = Workspace.objects.create(name='Espacio Vacío', created_by=self.user)
+        self.ws_lleno = Workspace.objects.create(name='Espacio Lleno', created_by=self.user)
+
+        self.company = Company.objects.create(
+            workspace=self.ws_lleno, name='PROTEGIDA S.A.', ruc='0999999999001'
+        )
+        self.report = Report.objects.create(
+            workspace=self.ws_lleno, company=self.company, name='2024', year=2024
+        )
+        TotalCount.objects.create(workspace=self.ws_lleno, word='ingresos', quantity=42)
+        TotalCountReport.objects.create(report=self.report, word='ingresos', quantity=42)
+
+    def _snapshot(self):
+        return (
+            Workspace.objects.count(), Company.objects.count(), Report.objects.count(),
+            TotalCount.objects.count(), TotalCountReport.objects.count(),
+        )
+
+    def test_no_se_puede_borrar_espacio_con_contenido(self):
+        antes = self._snapshot()
+        resp = self.client.post(reverse('workspace_delete', args=[self.ws_lleno.id]))
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('reportes', resp.json()['error'])
+        self.assertEqual(self._snapshot(), antes)
+        self.assertTrue(Workspace.objects.filter(id=self.ws_lleno.id).exists())
+
+    def test_el_modelo_protege_el_borrado_a_nivel_base_de_datos(self):
+        antes = self._snapshot()
+        with self.assertRaises(ProtectedError):
+            self.ws_lleno.delete()
+        self.assertEqual(self._snapshot(), antes)
+
+    def test_se_puede_borrar_un_espacio_vacio(self):
+        resp = self.client.post(reverse('workspace_delete', args=[self.ws_vacio.id]))
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertFalse(Workspace.objects.filter(id=self.ws_vacio.id).exists())
+        self.assertTrue(Workspace.objects.filter(id=self.ws_lleno.id).exists())
+
+    def test_no_se_puede_borrar_el_unico_espacio_activo(self):
+        # Dejo solo el ws_lleno: vacío y único → rechazado por ser el único
+        self.ws_vacio.delete()
+        self.ws_lleno.reports.all().delete()
+        self.ws_lleno.companies.all().delete()
+
+        resp = self.client.post(reverse('workspace_delete', args=[self.ws_lleno.id]))
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('único', resp.json()['error'])
+        self.assertTrue(Workspace.objects.filter(id=self.ws_lleno.id).exists())
+
+    def test_archivar_oculta_sin_borrar_y_es_reversible(self):
+        antes = self._snapshot()
+
+        resp = self.client.post(reverse('workspace_archive', args=[self.ws_lleno.id]))
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertTrue(resp.json()['is_archived'])
+
+        # Ningún dato se perdió
+        self.assertEqual(self._snapshot(), antes)
+
+        # No aparece en la lista de espacios seleccionables
+        from Counter.workspace_utils import get_user_workspaces
+        self.assertNotIn(self.ws_lleno, list(get_user_workspaces(self.user)))
+        # Pero sí en la pantalla de gestión (para poder restaurarlo)
+        self.assertIn(self.ws_lleno, list(get_user_workspaces(self.user, include_archived=True)))
+
+        # La tarjeta se muestra con el distintivo "Archivado"
+        resp_list = self.client.get(reverse('workspaces_list'))
+        self.assertEqual(resp_list.status_code, 200)
+        self.assertIn('Archivado', resp_list.content.decode('utf-8'))
+
+        # Y la sesión no puede seguir apuntando a un espacio archivado
+        self.assertNotEqual(
+            self.client.session.get('active_workspace_id'), self.ws_lleno.id
+        )
+
+        # Restaurar
+        resp_back = self.client.post(reverse('workspace_archive', args=[self.ws_lleno.id]))
+        self.assertEqual(resp_back.status_code, 200)
+        self.assertFalse(resp_back.json()['is_archived'])
+        self.assertEqual(self._snapshot(), antes)
+
+    def test_no_se_puede_archivar_el_unico_espacio_activo(self):
+        self.ws_lleno.is_archived = True
+        self.ws_lleno.save(update_fields=['is_archived'])
+
+        resp = self.client.post(reverse('workspace_archive', args=[self.ws_vacio.id]))
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('único', resp.json()['error'])
+        self.assertFalse(Workspace.objects.get(id=self.ws_vacio.id).is_archived)
+
+
+class DenegarPorDefectoTests(TestCase):
+    """Un usuario sin espacio de trabajo aprobado no ve nada del trabajo hecho."""
+
+    PANTALLAS = [
+        'panel', 'companies', 'reports', 'totalcount', 'upload',
+        'concealment_detection', 'concealment_history', 'expert_lists',
+        'comparative_analysis',
+    ]
+
+    def setUp(self):
+        # Un espacio con datos que pertenece a otra persona (el "trabajo hecho").
+        self.admin = User.objects.create_superuser(
+            username='dueno_datos', password='password123'
+        )
+        self.ws = Workspace.objects.create(name='Espacio Ajeno', created_by=self.admin)
+        WorkspaceMembership.objects.create(workspace=self.ws, user=self.admin, role='admin')
+        self.company = Company.objects.create(
+            workspace=self.ws, name='CONFIDENCIAL S.A.', ruc='0998888889001'
+        )
+        self.report = Report.objects.create(
+            workspace=self.ws, company=self.company, name='2024', year=2024
+        )
+
+        # Usuario recién registrado: sin membresías.
+        self.nuevo = User.objects.create_user(username='nuevo', password='password123')
+        self.client = Client()
+        self.client.login(username='nuevo', password='password123')
+
+    def test_redirige_a_la_pantalla_de_espacios(self):
+        for name in self.PANTALLAS:
+            with self.subTest(vista=name):
+                resp = self.client.get(reverse(name))
+                self.assertEqual(resp.status_code, 302)
+                self.assertIn('/workspaces/', resp['Location'])
+
+    def test_no_aparece_ningun_dato_del_espacio_ajeno(self):
+        resp = self.client.get(reverse('workspaces_list'))
+        self.assertEqual(resp.status_code, 200)
+        content = resp.content.decode('utf-8')
+        self.assertNotIn('CONFIDENCIAL S.A.', content)
+        self.assertNotIn('Espacio Ajeno', content)
+        self.assertIn('Aún no tienes acceso a ningún espacio de trabajo', content)
+
+    @modify_settings(MIDDLEWARE={'remove': ['Counter.middleware.WorkspaceAccessGuardMiddleware']})
+    def test_las_vistas_filtran_incluso_sin_el_middleware(self):
+        # Segunda barrera: aunque una vista se saltara el guard, sin espacio
+        # activo debe devolver listas vacías y nunca el total global.
+        companies = self.client.get(reverse('companies'))
+        self.assertEqual(companies.status_code, 200)
+        self.assertNotIn('CONFIDENCIAL S.A.', companies.content.decode('utf-8'))
+
+        reports = self.client.get(reverse('reports'))
+        self.assertNotIn('CONFIDENCIAL S.A.', reports.content.decode('utf-8'))
+
+        panel = self.client.get(reverse('panel'))
+        self.assertEqual(panel.status_code, 200)
+        self.assertEqual(panel.context['total_companies'], 0)
+        self.assertEqual(panel.context['total_reports'], 0)
+
+        totalcount = self.client.get(reverse('totalcount'))
+        self.assertEqual(list(totalcount.context['total_counts']), [])
+        self.assertEqual(list(totalcount.context['companies']), [])
+
+    def test_las_peticiones_ajax_reciben_403(self):
+        resp = self.client.get(
+            reverse('reports_by_year') + '?year=2024',
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest',
+        )
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json()['detail'], 'no_active_workspace')
+
+    def test_staff_ve_todo_sin_necesitar_aprobacion(self):
+        self.client.logout()
+        self.client.login(username='dueno_datos', password='password123')
+        # Staff sin ningún espacio propio: sigue viendo los suyos y el ajeno.
+        Workspace.objects.filter(created_by=self.admin).update(created_by=None)
+        self.admin.workspace_memberships.all().delete()
+        resp = self.client.get(reverse('panel'))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context['total_reports'], 1)
+
+    def test_puede_acceder_a_la_pantalla_de_espacios_y_al_login(self):
+        self.assertEqual(self.client.get(reverse('workspaces_list')).status_code, 200)
+        self.client.logout()
+        self.assertEqual(self.client.get(reverse('login')).status_code, 200)
+        self.assertEqual(self.client.get(reverse('register')).status_code, 200)
+
+
+class WorkspaceMemberManagementTests(TestCase):
+    """La aprobación de acceso: el admin del espacio añade o quita usuarios."""
+
+    def setUp(self):
+        # Admin del espacio (staff): quien aprueba.
+        self.admin = User.objects.create_user(
+            username='admin_espacio', password='password123', is_staff=True
+        )
+        self.ws = Workspace.objects.create(name='Espacio Privado', created_by=self.admin)
+        WorkspaceMembership.objects.create(workspace=self.ws, user=self.admin, role='admin')
+
+        self.company = Company.objects.create(
+            workspace=self.ws, name='SECRETA S.A.', ruc='0997777777001'
+        )
+        Report.objects.create(workspace=self.ws, company=self.company, name='2024', year=2024)
+
+        self.solicitante = User.objects.create_user(
+            username='solicitante', password='password123'
+        )
+
+        self.admin_client = Client()
+        self.admin_client.login(username='admin_espacio', password='password123')
+        self.user_client = Client()
+        self.user_client.login(username='solicitante', password='password123')
+
+    def _add(self, client, role='viewer', user=None, ws=None):
+        return client.post(
+            reverse('workspace_members_add', args=[(ws or self.ws).id]),
+            json.dumps({'user_id': (user or self.solicitante).id, 'role': role}),
+            content_type='application/json',
+        )
+
+    def test_antes_de_aprobar_no_ve_los_datos(self):
+        resp = self.user_client.get(reverse('panel'))
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn('/workspaces/', resp['Location'])
+
+    def test_add_da_acceso_y_remove_lo_quita(self):
+        resp = self._add(self.admin_client, role='viewer')
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertTrue(
+            WorkspaceMembership.objects.filter(
+                workspace=self.ws, user=self.solicitante, role='viewer'
+            ).exists()
+        )
+
+        # Con acceso: sí ve el panel y las empresas de ese espacio.
+        panel = self.user_client.get(reverse('panel'))
+        self.assertEqual(panel.status_code, 200)
+        self.assertEqual(panel.context['total_companies'], 1)
+        companies = self.user_client.get(reverse('companies'))
+        self.assertIn('SECRETA S.A.', companies.content.decode('utf-8'))
+
+        # Al quitarlo, vuelve a no ver nada.
+        resp = self.admin_client.post(
+            reverse('workspace_members_remove', args=[self.ws.id]),
+            json.dumps({'user_id': self.solicitante.id}),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+        self.assertFalse(
+            WorkspaceMembership.objects.filter(
+                workspace=self.ws, user=self.solicitante
+            ).exists()
+        )
+        self.assertEqual(self.user_client.get(reverse('panel')).status_code, 302)
+
+    def test_alguien_sin_permiso_no_gestionar_miembros(self):
+        # 'solicitante' tiene acceso a OTRO espacio: pasa el guard pero no administra este.
+        otro_ws = Workspace.objects.create(name='Espacio Público', created_by=self.admin)
+        WorkspaceMembership.objects.create(
+            workspace=otro_ws, user=self.solicitante, role='admin'
+        )
+        self.assertEqual(self._add(self.user_client).status_code, 403)
+
+        # Un editor (rol medio) tampoco puede gestionar miembros.
+        otro = User.objects.create_user(username='editor_espacio', password='password123')
+        WorkspaceMembership.objects.create(
+            workspace=self.ws, user=otro, role='editor'
+        )
+        editor_client = Client()
+        editor_client.login(username='editor_espacio', password='password123')
+        self.assertEqual(self._add(editor_client, user=self.solicitante).status_code, 403)
+        self.assertEqual(
+            editor_client.get(
+                reverse('workspace_members', args=[self.ws.id])
+            ).status_code,
+            403,
+        )
+
+    def test_listado_de_miembros_y_disponibles(self):
+        resp = self.admin_client.get(reverse('workspace_members', args=[self.ws.id]))
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        usernames = [m['username'] for m in data['members']]
+        self.assertIn('admin_espacio', usernames)
+        self.assertNotIn('solicitante', usernames)
+        self.assertIn('solicitante', [u['username'] for u in data['available_users']])
+        # El creador nunca se puede quitar a sí mismo.
+        creador = next(m for m in data['members'] if m['username'] == 'admin_espacio')
+        self.assertFalse(creador['puede_eliminar'])
+        self.assertFalse(creador['puede_cambiar_rol'])
+
+    def test_no_se_puede_anadir_dos_veces_ni_con_rol_invalido(self):
+        self.assertEqual(self._add(self.admin_client).status_code, 200)
+        self.assertEqual(self._add(self.admin_client).status_code, 400)
+        self.assertEqual(self._add(self.admin_client, role='superpoder').status_code, 400)
+
+    def test_no_se_puede_dejar_el_espacio_sin_administradores(self):
+        # admin_espacio es el creador: inamovible. Se añade otro admin y se quita.
+        segundo = User.objects.create_user(username='segundo_admin', password='password123')
+        WorkspaceMembership.objects.create(
+            workspace=self.ws, user=segundo, role='admin'
+        )
+        self.assertEqual(
+            self._add(self.admin_client, user=self.solicitante, role='admin').status_code, 200
+        )
+
+        # Quitar al segundo admin deja al creador como único admin: permitido.
+        resp = self.admin_client.post(
+            reverse('workspace_members_remove', args=[self.ws.id]),
+            json.dumps({'user_id': segundo.id}),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 200, resp.content)
+
+        # Cambiarle el rol al creador está vetado.
+        resp = self.admin_client.post(
+            reverse('workspace_members_role', args=[self.ws.id]),
+            json.dumps({'user_id': self.admin.id, 'role': 'viewer'}),
+            content_type='application/json',
+        )
+        self.assertEqual(resp.status_code, 400)
+        self.assertTrue(
+            WorkspaceMembership.objects.filter(
+                workspace=self.ws, user=self.admin, role='admin'
+            ).exists()
+        )
+
+    def test_no_puede_anadir_a_un_usuario_inactivo(self):
+        inactivo = User.objects.create_user(
+            username='baja', password='password123', is_active=False
+        )
+        resp = self._add(self.admin_client, user=inactivo)
+        self.assertEqual(resp.status_code, 404)
+        self.assertFalse(
+            WorkspaceMembership.objects.filter(workspace=self.ws, user=inactivo).exists()
+        )
+
+    def test_el_boton_de_miembros_solo_aparece_para_el_admin(self):
+        resp = self.admin_client.get(reverse('workspaces_list'))
+        content = resp.content.decode('utf-8')
+        self.assertIn('onclick="openMembersModal(', content)
+
+        WorkspaceMembership.objects.create(
+            workspace=self.ws, user=self.solicitante, role='viewer'
+        )
+        resp = self.user_client.get(reverse('workspaces_list'))
+        self.assertNotIn('onclick="openMembersModal(', resp.content.decode('utf-8'))
+
+
+class ComplexMetricsTests(TestCase):
+    """Pruebas de robustez para el cálculo de métricas de complejidad y segmentación de oraciones."""
+
+    def test_calcular_metricas_complejidad_con_abreviaturas_y_decimales(self):
+        from Counter.utils import calcular_metricas_complejidad
+
+        texto = (
+            "El Art. 15 de la Cia. S.A. aprueba el balance por un total de 12.5 millones de dólares. "
+            "La empresa presentó utilidades operativas! "
+            "Hubo observaciones en la junta general? "
+            "El Dr. Pérez y el Sr. Gómez firmaron el informe."
+        )
+        metricas = calcular_metricas_complejidad(texto)
+        self.assertGreater(metricas["total_words"], 0)
+        self.assertEqual(metricas["total_sentences"], 4)
+        self.assertGreater(metricas["total_syllables"], 0)
+        self.assertGreater(metricas["avg_word_length"], 0)
+        self.assertGreater(metricas["avg_sentence_length"], 0)
+        self.assertIn("inflesz", metricas)
+        self.assertIn("inverted_inflesz", metricas)
+
+    def test_calcular_metricas_texto_vacio(self):
+        from Counter.utils import calcular_metricas_complejidad
+
+        metricas = calcular_metricas_complejidad("")
+        self.assertEqual(metricas["total_words"], 0)
+        self.assertEqual(metricas["total_sentences"], 0)
+
+
+class ExpertRoleAccessTests(TestCase):
+    """Pruebas de acceso restringido para usuarios con rol de Experto."""
+
+    def setUp(self):
+        self.admin = User.objects.create_superuser(username="admin_test", password="password123", email="admin@test.com")
+        self.ws = Workspace.objects.create(name="Espacio Peritaje", created_by=self.admin)
+        WorkspaceMembership.objects.create(workspace=self.ws, user=self.admin, role="admin")
+
+        self.expert_user = User.objects.create_user(username="perito", password="password123", email="perito@test.com")
+        Expert.objects.create(user=self.expert_user, profession="Perito Legal")
+        WorkspaceMembership.objects.create(workspace=self.ws, user=self.expert_user, role="editor")
+
+        self.client_expert = Client()
+        self.client_expert.login(username="perito", password="password123")
+
+    def test_experto_accede_a_deteccion_de_opacidad(self):
+        resp = self.client_expert.get(reverse("concealment_detection"))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_experto_accede_a_inicio(self):
+        resp = self.client_expert.get(reverse("index"))
+        self.assertEqual(resp.status_code, 200)
+
+    def test_experto_es_redirigido_desde_panel_y_otras_vistas(self):
+        resp = self.client_expert.get(reverse("panel"))
+        self.assertRedirects(resp, reverse("concealment_detection"))
+
+        resp_upload = self.client_expert.get(reverse("upload"))
+        self.assertRedirects(resp_upload, reverse("concealment_detection"))
+
+    def test_experto_no_puede_crear_editar_archivar_ni_eliminar_espacios(self):
+        # Crear espacio (JSON)
+        resp_create = self.client_expert.post(
+            reverse("workspace_create"),
+            json.dumps({"name": "Intento Experto"}),
+            content_type="application/json"
+        )
+        self.assertEqual(resp_create.status_code, 403)
+
+        # Editar espacio (JSON)
+        resp_update = self.client_expert.post(
+            reverse("workspace_update", args=[self.ws.id]),
+            json.dumps({"name": "Modificado por Experto"}),
+            content_type="application/json"
+        )
+        self.assertEqual(resp_update.status_code, 403)
+
+        # Archivar espacio
+        resp_archive = self.client_expert.post(reverse("workspace_archive", args=[self.ws.id]))
+        self.assertEqual(resp_archive.status_code, 403)
+
+        # Eliminar espacio
+        resp_delete = self.client_expert.post(reverse("workspace_delete", args=[self.ws.id]))
+        self.assertEqual(resp_delete.status_code, 403)
+
+        # Ver miembros
+        resp_members = self.client_expert.get(reverse("workspace_members", args=[self.ws.id]))
+        self.assertEqual(resp_members.status_code, 403)
+
+    def test_experto_ajax_a_ruta_no_permitida_recibe_403(self):
+        resp = self.client_expert.get(reverse("panel"), HTTP_X_REQUESTED_WITH="XMLHttpRequest")
+        self.assertEqual(resp.status_code, 403)
+        data = resp.json()
+        self.assertEqual(data.get("detail"), "expert_restricted_access")
+
+    def test_admin_asigna_experto_y_espacio_directamente(self):
+        client_admin = Client()
+        client_admin.login(username="admin_test", password="password123")
+        nuevo = User.objects.create_user(username="nuevo_experto", password="password123", email="nuevo@test.com")
+
+        resp = client_admin.post(
+            reverse("users_assign_expert", args=[nuevo.id]),
+            json.dumps({"profession": "Auditor Financiero", "workspace_id": self.ws.id}),
+            content_type="application/json"
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(Expert.objects.filter(user=nuevo, profession="Auditor Financiero").exists())
+        self.assertTrue(WorkspaceMembership.objects.filter(user=nuevo, workspace=self.ws).exists())
+
+    def test_crear_usuario_con_rol_experto_y_espacio_directo(self):
+        client_admin = Client()
+        client_admin.login(username="admin_test", password="password123")
+        resp = client_admin.post(
+            reverse("users_create"),
+            json.dumps({
+                "username": "perito_legal_1",
+                "email": "perito@lex.com",
+                "password": "Password123!",
+                "role": "expert",
+                "profession": "Perito Legal",
+                "workspace_id": self.ws.id,
+                "is_active": True
+            }),
+            content_type="application/json"
+        )
+        self.assertEqual(resp.status_code, 200)
+        created_user = User.objects.get(username="perito_legal_1")
+        self.assertFalse(created_user.is_staff)
+        self.assertTrue(Expert.objects.filter(user=created_user, profession="Perito Legal").exists())
+        self.assertTrue(WorkspaceMembership.objects.filter(user=created_user, workspace=self.ws).exists())
+
+    def test_crear_usuario_experto_falla_sin_especialidad(self):
+        client_admin = Client()
+        client_admin.login(username="admin_test", password="password123")
+        resp = client_admin.post(
+            reverse("users_create"),
+            json.dumps({
+                "username": "experto_sin_prof",
+                "email": "sinprof@lex.com",
+                "password": "Password123!",
+                "role": "expert",
+                "profession": "",
+                "workspace_id": self.ws.id
+            }),
+            content_type="application/json"
+        )
+        self.assertEqual(resp.status_code, 400)
+        data = resp.json()
+        self.assertIn("especialidad", data["error"].lower())
+
+    def test_panel_usuarios_renderiza_3_roles_y_espacios(self):
+        client_admin = Client()
+        client_admin.login(username="admin_test", password="password123")
+        # Crear un usuario auditor y uno experto
+        auditor = User.objects.create_user(username="auditor_test_view", password="password123", email="aud@test.com")
+        WorkspaceMembership.objects.create(workspace=self.ws, user=auditor, role="editor")
+        
+        experto_u = User.objects.create_user(username="expert_test_view", password="password123", email="exp@test.com")
+        Expert.objects.create(user=experto_u, profession="Economista")
+        WorkspaceMembership.objects.create(workspace=self.ws, user=experto_u, role="editor")
+
+        resp = client_admin.get(reverse("users"))
+        self.assertEqual(resp.status_code, 200)
+        content = resp.content.decode("utf-8")
+        self.assertIn("Administrador", content)
+        self.assertIn("Auditor", content)
+        self.assertIn("Experto", content)
+        self.assertIn("Economista", content)
+        self.assertIn(self.ws.name, content)
+
+
+class LinguisticProcessingEngineTests(TestCase):
+    """
+    Pruebas unitarias para el motor de procesamiento léxico, fonotáctico
+    y métricas lingüísticas en español (Bloque I de Auditoría).
+    """
+
+    def setUp(self):
+        from Counter.cleaner import quitar_tildes
+        from Counter.stopwords import STOPWORDS_ES
+        self.sw = set(quitar_tildes(p) for p in STOPWORDS_ES)
+
+    def test_quitar_tildes_preserva_enie(self):
+        from Counter.cleaner import quitar_tildes
+        self.assertEqual(quitar_tildes("año"), "año")
+        self.assertEqual(quitar_tildes("daño"), "daño")
+        self.assertEqual(quitar_tildes("compañía"), "compañia")
+        self.assertEqual(quitar_tildes("AÑO"), "AÑO")
+        self.assertEqual(quitar_tildes("canción"), "cancion")
+
+    def test_recuperacion_ocr_h_caida(self):
+        from Counter.cleaner import procesar_palabra_individual
+        self.assertEqual(procesar_palabra_individual("abitacion", self.sw), ["habitacion"])
+        self.assertEqual(procesar_palabra_individual("onorarios", self.sw), ["honorarios"])
+        self.assertEqual(procesar_palabra_individual("ospitales", self.sw), ["hospitales"])
+        # Palabras reales no deben ser mutadas
+        self.assertEqual(procesar_palabra_individual("espero", self.sw), ["espero"])
+        self.assertEqual(procesar_palabra_individual("echa", self.sw), ["echa"])
+        self.assertEqual(procesar_palabra_individual("abrir", self.sw), ["abrir"])
+
+    def test_rechazo_pseudopalabras_faux_bold_y_triples(self):
+        from Counter.cleaner import procesar_palabra_individual
+        self.assertEqual(procesar_palabra_individual("aaaab", self.sw), [])
+        self.assertEqual(procesar_palabra_individual("aaabc", self.sw), [])
+        self.assertEqual(procesar_palabra_individual("zzzz", self.sw), [])
+        self.assertEqual(procesar_palabra_individual("abb", self.sw), [])
+        # Faux-bold de palabra real se colapsa a palabra válida
+        self.assertEqual(procesar_palabra_individual("bbbbancos", self.sw), ["bancos"])
+
+    def test_rechazo_grupos_consonanticos_invalidos(self):
+        from Counter.cleaner import procesar_palabra_individual
+        self.assertEqual(procesar_palabra_individual("inmv", self.sw), [])
+        self.assertEqual(procesar_palabra_individual("agpm", self.sw), [])
+        self.assertEqual(procesar_palabra_individual("cztp", self.sw), [])
+
+    def test_stopwords_protegidas_contabilidad(self):
+        from Counter.stopwords import STOPWORDS_ES
+        self.assertNotIn("estados", STOPWORDS_ES)
+        self.assertNotIn("estado", STOPWORDS_ES)
+        self.assertNotIn("empleo", STOPWORDS_ES)
+        self.assertNotIn("cuenta", STOPWORDS_ES)
+        self.assertNotIn("balance", STOPWORDS_ES)
+
+        from Counter.cleaner import procesar_palabra_individual
+        self.assertEqual(procesar_palabra_individual("estados", self.sw), ["estados"])
+        self.assertEqual(procesar_palabra_individual("empleo", self.sw), ["empleo"])
+
+    def test_palabras_tecnicas_con_dieresis(self):
+        from django.contrib.auth.models import User
+        from User.models import Expert
+        from Counter.models import Workspace, ExpertWord
+        from Counter.utils import contar_palabras_tecnicas
+
+        user = User.objects.create_user(username="perito_dieresis", password="password123")
+        expert = Expert.objects.create(user=user, profession="Perito Legal")
+        ws = Workspace.objects.create(name="Espacio Diéresis")
+        ExpertWord.objects.create(
+            expert=expert,
+            workspace=ws,
+            name="Lista Auditoría Lingüística",
+            words=["lingüística", "antigüedad"]
+        )
+
+        texto = "El perito evaluó la lingüística del informe y la antigüedad de los saldos."
+        cant = contar_palabras_tecnicas(texto, workspace=ws)
+        self.assertEqual(cant, 2)
+
+    def test_calculo_complejidad_general_y_legibilidad(self):
+        from Counter.utils import calcular_complejidad_general, calcular_metricas_complejidad
+
+        # Legibilidad alta (0.8) -> menor complejidad
+        comp_facil = calcular_complejidad_general(0.3, 0.8, 0.1)
+        # Legibilidad baja (0.2) -> mayor complejidad
+        comp_dificil = calcular_complejidad_general(0.3, 0.2, 0.1)
+        self.assertLess(comp_facil, comp_dificil)
+
+        texto = "Este informe financiero presenta utilidades consistentes en el ejercicio económico anual."
+        m = calcular_metricas_complejidad(texto)
+        self.assertIn("readability_score", m)
+        self.assertIn("inverted_inflesz", m)
+        self.assertGreaterEqual(m["inverted_inflesz"], 0.0)
+        self.assertLessEqual(m["inverted_inflesz"], 1.0)
+
+    def test_dehyphenation_multilinea_con_paginacion(self):
+        from Counter.cleaner import extraer_palabras_limpias
+        texto = (
+            "La admi-\n"
+            "------------------ Página 12 de 85 ------------------\n"
+            "nistración de la empresa presentó los resultados."
+        )
+        palabras = extraer_palabras_limpias(texto, self.sw)
+        self.assertIn("administracion", palabras)
+        self.assertNotIn("admi", palabras)
+        self.assertNotIn("nistracion", palabras)
+
+
+class CoinertiaAnalysisTests(TestCase):
+    def setUp(self):
+        import numpy as np
+        self.np = np
+        self.user = User.objects.create_user(username='coinertia_user', password='password123')
+        self.client.login(username='coinertia_user', password='password123')
+        self.ws = Workspace.objects.create(name='Espacio Co-Inercia', created_by=self.user)
+
+        self.comp1 = Company.objects.create(workspace=self.ws, name='CIA UNO', ruc='1111111111001')
+        self.comp2 = Company.objects.create(workspace=self.ws, name='CIA DOS', ruc='2222222222001')
+        self.comp3 = Company.objects.create(workspace=self.ws, name='CIA TRES', ruc='3333333333001')
+
+        self.rep24_1 = Report.objects.create(workspace=self.ws, company=self.comp1, year=2024, name='R24_1')
+        self.rep24_2 = Report.objects.create(workspace=self.ws, company=self.comp2, year=2024, name='R24_2')
+        self.rep24_3 = Report.objects.create(workspace=self.ws, company=self.comp3, year=2024, name='R24_3')
+
+        self.rep25_1 = Report.objects.create(workspace=self.ws, company=self.comp1, year=2025, name='R25_1')
+        self.rep25_2 = Report.objects.create(workspace=self.ws, company=self.comp2, year=2025, name='R25_2')
+        self.rep25_3 = Report.objects.create(workspace=self.ws, company=self.comp3, year=2025, name='R25_3')
+
+        for rep in [self.rep24_1, self.rep24_2, self.rep24_3, self.rep25_1, self.rep25_2, self.rep25_3]:
+            TotalCountReport.objects.create(report=rep, word='ingresos', quantity=10)
+            TotalCountReport.objects.create(report=rep, word='gastos', quantity=5)
+            TotalCountReport.objects.create(report=rep, word='activo', quantity=8)
+
+        self.expert_user = User.objects.create_user(username='perito_test', password='password123')
+        self.expert = Expert.objects.create(user=self.expert_user, profession='Perito Contable')
+        self.exp_list = ExpertWord.objects.create(
+            expert=self.expert,
+            workspace=self.ws,
+            name='Lista Pericial Test',
+            words=['ingresos', 'activo']
+        )
+
+    def test_compute_rv_coefficient_math(self):
+        from Counter.coinertia import compute_rv_coefficient
+        import numpy as np
+
+        # Identical matrices should have RV = 1.0, distance = 0.0
+        X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+        rv, dist = compute_rv_coefficient(X, X)
+        self.assertAlmostEqual(rv, 1.0, places=5)
+        self.assertAlmostEqual(dist, 0.0, places=5)
+
+        # Empty / degenerate matrices
+        rv_empty, dist_empty = compute_rv_coefficient(np.array([]), np.array([]))
+        self.assertEqual(rv_empty, 0.0)
+
+    def test_run_longitudinal_coinertia_analysis(self):
+        from Counter.coinertia import run_longitudinal_coinertia_analysis
+        result = run_longitudinal_coinertia_analysis(self.ws, base_year=2025, expert_list_id=self.exp_list.id)
+        self.assertIsNotNone(result)
+        self.assertEqual(result['base_year'], 2025)
+        self.assertIn('co_inertia', result)
+        self.assertIn('star_graph', result)
+        self.assertEqual(result['star_graph']['center_node']['year'], 2025)
+        self.assertEqual(len(result['star_graph']['orbits']), 4)
+        self.assertTrue(len(result['star_graph']['nodes_general']) >= 1)
+        self.assertIn('radial_chart', result)
+        self.assertEqual(len(result['radial_chart']['rings']), 5)
+        self.assertTrue(len(result['radial_chart']['axes']) >= 1)
+
+    def test_compare_company_across_years(self):
+        from Counter.coinertia import compare_company_across_years
+        diff = compare_company_across_years(self.ws, self.comp1.id, 2024, 2025)
+        self.assertIsNotNone(diff)
+        self.assertEqual(diff['jaccard_similarity'], 100.0)
+        self.assertEqual(diff['common_count'], 3)
+        self.assertEqual(diff['added_count'], 0)
+
+    def test_view_coinertia_and_company_tabs(self):
+        # Tab coinertia
+        resp = self.client.get(reverse('comparative_analysis') + '?tab=coinertia&base_year=2025')
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Co-Inercia')
+        self.assertContains(resp, 'Diagrama Radial')
+        self.assertContains(resp, 'Grafo en Estrella')
+        self.assertContains(resp, 'starGraphSvg')
+
+        # Tab company
+        url = f"{reverse('comparative_analysis')}?tab=company&company_id={self.comp1.id}&year1=2024&year2=2025"
+        resp = self.client.get(url)
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, 'Similitud de Vocabulario (Jaccard)')
+
+
+
+

@@ -41,4 +41,7 @@ node_modules/
 *.env
 
 # Archivos de reportes temporales o exportaciones
-
+*.sqlite3*
+*.backup*
+*.zip
+*.bundle

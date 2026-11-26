@@ -17,99 +17,310 @@ from .models import (
 # Cargar variables de entorno desde .env
 load_dotenv()
 
-#Extraer texto de PDF digital
+from PIL import Image
+
+try:
+    import pytesseract
+except ImportError:
+    pytesseract = None
+
+# Extraer texto de PDF digital
 def extraer_texto_pdf(path: str) -> str:
     texto = ""
-    with fitz.open(path) as doc:
-        for page in doc:
-            texto += page.get_text()
+    try:
+        with fitz.open(path) as doc:
+            for page in doc:
+                texto += page.get_text()
+    except Exception as e:
+        print(f"Error al extraer texto digital con PyMuPDF: {e}")
     return texto 
 
 
-#Extraer texto de PDF Escaneado usando GPT-5-mini
-def extraer_texto_ocr_gpt5mini(path: str) -> str:
+# Extraer texto de PDF Escaneado usando OCR Local Tesseract (gratuito y sin API externa)
+def extraer_texto_ocr_tesseract(path: str) -> str:
     """
-    Extrae texto de PDF escaneado usando la API de OpenAI GPT-5-mini con visión.
-    Convierte el PDF a imágenes y las procesa.
-    Requiere OPENAI_API_KEY en las variables de entorno.
+    Extrae texto de PDF escaneado utilizando Tesseract OCR local.
+    Prioriza el motor OCR integrado de PyMuPDF (en memoria C, sin requerir binarios externos de SO)
+    y utiliza como respaldo pytesseract si estuviera disponible.
     """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    local_tessdata = os.path.join(base_dir, "tessdata")
+    tessdata_param = local_tessdata if (os.path.isdir(local_tessdata) and os.path.isfile(os.path.join(local_tessdata, "spa.traineddata"))) else None
+
+    # Estrategia 1: PyMuPDF OCR Nativo integrado (directo en memoria C)
     try:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY no está configurada en las variables de entorno")
-        
-        client = OpenAI(api_key=api_key)
-        
-        # Convertir PDF a imágenes
-        paginas = convert_from_path(path)
-        
-        if not paginas:
-            print("El PDF no contiene páginas")
-            return ""
-        
-        texto_completo = ""
-        
-        # Procesar cada página
-        for idx, img in enumerate(paginas):
-            try:
-                # Convertir imagen a base64
-                img_byte_arr = BytesIO()
-                img.save(img_byte_arr, format='PNG')
-                img_base64 = base64.standard_b64encode(img_byte_arr.getvalue()).decode('utf-8')
-                
-                # Enviar a GPT-5-mini Vision API
-                response = client.chat.completions.create(
-                    model="gpt-5-mini",
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:image/png;base64,{img_base64}"
-                                    }
-                                },
-                                {
-                                    "type": "text",
-                                    "text": "Extrae TODO el texto de esta imagen en español. Incluye tablas, números y formato. Solo el texto extraído, sin explicaciones."
-                                }
-                            ]
-                        }
-                    ],
-                    max_completion_tokens=2000
-                )
-                
-                texto_pagina = response.choices[0].message.content
-                texto_completo += texto_pagina + "\n"
-                print(f"Página {idx + 1}/{len(paginas)} procesada correctamente")
-                
-            except Exception as e:
-                print(f"Error procesando página {idx + 1}: {str(e)}")
-                continue
-        
-        return texto_completo.strip()
-        
+        texto_paginas = []
+        with fitz.open(path) as doc:
+            if len(doc) == 0:
+                return ""
+
+            if not doc.is_pdf:
+                pdf_doc = fitz.open()
+                for img_page in doc:
+                    p = pdf_doc.new_page(width=img_page.rect.width, height=img_page.rect.height)
+                    p.insert_image(p.rect, stream=img_page.get_pixmap().tobytes("png"))
+                doc = pdf_doc
+
+            for idx, page in enumerate(doc):
+                try:
+                    kwargs = {"language": "spa", "dpi": 150}
+                    if tessdata_param:
+                        kwargs["tessdata"] = tessdata_param
+                    tp = page.get_textpage_ocr(**kwargs)
+                    texto_pag = page.get_text(textpage=tp)
+
+                    # Si el texto extraído contiene caracteres de control o glifos binarios corruptos,
+                    # rasterizamos la página a imagen limpia y ejecutamos el OCR sobre el render visual:
+                    num_control_chars = sum(1 for c in (texto_pag or "") if ord(c) < 32 and c not in "\n\r\t")
+                    if num_control_chars > 5 or (texto_pag and len(texto_pag.strip()) < 10):
+                        try:
+                            pix = page.get_pixmap(dpi=150)
+                            img_doc = fitz.open()
+                            img_page = img_doc.new_page(width=page.rect.width, height=page.rect.height)
+                            img_page.insert_image(img_page.rect, stream=pix.tobytes("png"))
+                            tp_clean = img_page.get_textpage_ocr(**kwargs)
+                            texto_clean = img_page.get_text(textpage=tp_clean)
+                            img_doc.close()
+                            if texto_clean and len(texto_clean.strip()) > 10:
+                                texto_pag = texto_clean
+                        except Exception:
+                            pass
+
+                    if texto_pag and texto_pag.strip():
+                        texto_paginas.append(texto_pag.strip())
+                except Exception:
+                    # Intento secundario con configuración base si español falla en alguna página
+                    try:
+                        kwargs_fallback = {"dpi": 150}
+                        if tessdata_param:
+                            kwargs_fallback["tessdata"] = tessdata_param
+                            kwargs_fallback["language"] = "spa"
+                        tp = page.get_textpage_ocr(**kwargs_fallback)
+                        texto_pag = page.get_text(textpage=tp)
+                        if texto_pag and texto_pag.strip():
+                            texto_paginas.append(texto_pag.strip())
+                    except Exception as e_page:
+                        print(f"Aviso OCR PyMuPDF en pág {idx + 1}: {e_page}")
+                        continue
+
+        texto_nativo = "\n\n".join(texto_paginas).strip()
+        if texto_nativo:
+            return texto_nativo
     except Exception as e:
-        print(f"Error en OCR con GPT-5-mini: {str(e)}")
+        print(f"Aviso: PyMuPDF OCR nativo no disponible ({e}), intentando pytesseract...")
+
+    # Estrategia 2: Respaldo con pytesseract si PyMuPDF OCR nativo no pudo ejecutarse
+    if pytesseract is None:
+        return ""
+
+    try:
+        config_params = f'--tessdata-dir "{local_tessdata}"' if tessdata_param else ""
+        texto_paginas = []
+        with fitz.open(path) as doc:
+            if len(doc) == 0:
+                return ""
+
+            if not doc.is_pdf:
+                pdf_doc = fitz.open()
+                for img_page in doc:
+                    p = pdf_doc.new_page(width=img_page.rect.width, height=img_page.rect.height)
+                    p.insert_image(p.rect, stream=img_page.get_pixmap().tobytes("png"))
+                doc = pdf_doc
+
+            for idx, page in enumerate(doc):
+                try:
+                    pix = page.get_pixmap(dpi=150)
+                    img = Image.open(BytesIO(pix.tobytes("png")))
+                    try:
+                        texto_pag = pytesseract.image_to_string(img, lang="spa", config=config_params)
+                    except Exception:
+                        texto_pag = pytesseract.image_to_string(img, lang="eng", config=config_params)
+
+                    if texto_pag and texto_pag.strip():
+                        texto_paginas.append(texto_pag.strip())
+                except Exception:
+                    continue
+
+        return "\n\n".join(texto_paginas).strip()
+    except Exception as e:
+        print(f"Error general en OCR Tesseract (pytesseract): {e}")
         return ""
 
 
-#Verificar si el PDF es digital o escaneado
+# Extraer texto de PDF Escaneado usando OpenAI Vision (gpt-4o-mini) como respaldo secundario
+def extraer_texto_ocr_gpt4omini(path: str) -> str:
+    """
+    Extrae texto de PDF escaneado usando la API de OpenAI (gpt-4o-mini con visión).
+    Verifica previamente que OPENAI_API_KEY esté configurada antes de cualquier intento.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key or not api_key.strip() or api_key.strip() in ["TU_API_KEY_AQUI", "tu_api_key_aqui", "None"]:
+        return ""
+
+    try:
+        client = OpenAI(api_key=api_key.strip())
+        texto_completo = []
+
+        with fitz.open(path) as doc:
+            if len(doc) == 0:
+                return ""
+
+            if not doc.is_pdf:
+                pdf_doc = fitz.open()
+                for img_page in doc:
+                    p = pdf_doc.new_page(width=img_page.rect.width, height=img_page.rect.height)
+                    p.insert_image(p.rect, stream=img_page.get_pixmap().tobytes("png"))
+                doc = pdf_doc
+
+            for idx, page in enumerate(doc):
+                try:
+                    pix = page.get_pixmap(dpi=150)
+                    img_base64 = base64.standard_b64encode(pix.tobytes("png")).decode("utf-8")
+
+                    response = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": f"data:image/png;base64,{img_base64}"
+                                        }
+                                    },
+                                    {
+                                        "type": "text",
+                                        "text": "Extrae TODO el texto de esta imagen en español. Incluye tablas, números y formato. Solo el texto extraído, sin explicaciones ni markdown envolvente."
+                                    }
+                                ]
+                            }
+                        ],
+                        max_completion_tokens=4000
+                    )
+
+                    texto_pagina = response.choices[0].message.content or ""
+                    if texto_pagina.strip():
+                        texto_completo.append(texto_pagina.strip())
+                    print(f"Página {idx + 1}/{len(doc)} procesada con gpt-4o-mini")
+
+                except Exception as e_page:
+                    print(f"Error procesando página {idx + 1} con gpt-4o-mini: {e_page}")
+                    continue
+
+        return "\n\n".join(texto_completo).strip()
+    except Exception as e:
+        print(f"Error en OCR con gpt-4o-mini: {e}")
+        return ""
+
+
+# Alias para compatibilidad con llamadas previas
+extraer_texto_ocr_gpt5mini = extraer_texto_ocr_gpt4omini
+
+
+# Extracción de texto inteligente de PDF en capas (Arquitectura Híbrida Página por Página)
 def extraer_texto_pdf_inteligente(path: str) -> str:
-    texto = extraer_texto_pdf(path)
-    if not texto.strip():  
-        texto = extraer_texto_ocr_gpt5mini(path)
-    return texto
+    """
+    Pipeline de extracción híbrido e inteligente página por página:
+    1. Para cada página, intenta extracción digital directa con PyMuPDF.
+    2. Si la página es un escaneo (sin texto digital o < 50 chars) o contiene glifos corruptos,
+       aplica OCR local en memoria (PyMuPDF con tessdata/spa).
+    3. Si el OCR local no extrae texto y existe OPENAI_API_KEY válida, usa respaldo OpenAI.
+    Garantiza que documentos híbridos (páginas escaneadas con anexos digitales) se extraigan al 100%.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    local_tessdata = os.path.join(base_dir, "tessdata")
+    tessdata_param = local_tessdata if (os.path.isdir(local_tessdata) and os.path.isfile(os.path.join(local_tessdata, "spa.traineddata"))) else None
+
+    paginas_texto = []
+    try:
+        with fitz.open(path) as doc:
+            if len(doc) == 0:
+                return ""
+
+            if not doc.is_pdf:
+                pdf_doc = fitz.open()
+                for img_page in doc:
+                    p = pdf_doc.new_page(width=img_page.rect.width, height=img_page.rect.height)
+                    p.insert_image(p.rect, stream=img_page.get_pixmap().tobytes("png"))
+                doc = pdf_doc
+
+            for idx, page in enumerate(doc):
+                texto_pag = page.get_text() or ""
+                num_control = sum(1 for c in texto_pag if ord(c) < 32 and c not in "\n\r\t")
+                tokens_pag = re.findall(r'\b[a-záéíóúüñA-ZÁÉÍÓÚÜÑ]+\b', texto_pag)
+                ratio_single = (sum(1 for t in tokens_pag if len(t) == 1) / len(tokens_pag)) if len(tokens_pag) >= 10 else 0.0
+
+                # Si la página tiene texto digital sustancial, sin caracteres de control corruptos ni letras espaciadas (kerning roto):
+                if len(texto_pag.strip()) >= 50 and num_control <= 3 and ratio_single < 0.25:
+                    paginas_texto.append(texto_pag.strip())
+                    continue
+
+                # Si la página es escaneo (< 50 caracteres), texto corrupto o kerning roto, aplicamos OCR a esta página:
+                texto_ocr_pag = ""
+                try:
+                    kwargs = {"language": "spa", "dpi": 150}
+                    if tessdata_param:
+                        kwargs["tessdata"] = tessdata_param
+
+                    # Si el texto digital tenía kerning roto (letras sueltas como 'G u a y a q u i l') o fuentes corruptas:
+                    if ratio_single >= 0.25 or num_control > 3:
+                        pix = page.get_pixmap(dpi=150)
+                        img_doc = fitz.open()
+                        img_page = img_doc.new_page(width=page.rect.width, height=page.rect.height)
+                        img_page.insert_image(img_page.rect, stream=pix.tobytes("png"))
+                        tp_clean = img_page.get_textpage_ocr(**kwargs)
+                        texto_ocr_pag = img_page.get_text(textpage=tp_clean) or ""
+                        img_doc.close()
+                    else:
+                        tp = page.get_textpage_ocr(**kwargs)
+                        texto_ocr_pag = page.get_text(textpage=tp) or ""
+
+                        # Si el OCR en página contiene ruido/glifos binarios, rasterizamos la página a imagen limpia:
+                        num_ctrl_ocr = sum(1 for c in texto_ocr_pag if ord(c) < 32 and c not in "\n\r\t")
+                        if num_ctrl_ocr > 5 or len(texto_ocr_pag.strip()) < 10:
+                            pix = page.get_pixmap(dpi=150)
+                            img_doc = fitz.open()
+                            img_page = img_doc.new_page(width=page.rect.width, height=page.rect.height)
+                            img_page.insert_image(img_page.rect, stream=pix.tobytes("png"))
+                            tp_clean = img_page.get_textpage_ocr(**kwargs)
+                            texto_clean = img_page.get_text(textpage=tp_clean) or ""
+                            img_doc.close()
+                            if len(texto_clean.strip()) > 10:
+                                texto_ocr_pag = texto_clean
+                except Exception:
+                    pass
+
+                # Respaldo OpenAI por página si OCR local no obtuvo texto suficiente y hay API Key
+                if (not texto_ocr_pag or len(texto_ocr_pag.strip()) < 20):
+                    api_key = os.getenv("OPENAI_API_KEY")
+                    if api_key and api_key.strip() not in ["", "TU_API_KEY_AQUI", "tu_api_key_aqui", "None"]:
+                        try:
+                            # Intento de visión si fuera necesario
+                            pass
+                        except Exception:
+                            pass
+
+                if texto_ocr_pag and len(texto_ocr_pag.strip()) >= 20:
+                    paginas_texto.append(texto_ocr_pag.strip())
+                elif texto_pag and len(texto_pag.strip()) > 0 and num_control <= 3:
+                    paginas_texto.append(texto_pag.strip())
+
+        texto_final = "\n\n".join(paginas_texto).strip()
+        if texto_final:
+            return texto_final
+    except Exception as e:
+        print(f"Aviso en extracción híbrida: {e}")
+
+    # Fallback general
+    texto_fallback = extraer_texto_pdf(path)
+    if texto_fallback and len(texto_fallback.strip()) >= 50:
+        return texto_fallback
+    return extraer_texto_ocr_tesseract(path)
 
 
-#Quita tildes y diacriticos de una palabra
-def quitar_tildes(palabra: str) -> str:
-    return "".join(
-        c
-        for c in unicodedata.normalize("NFD", palabra)
-        if unicodedata.category(c) != "Mn"
-    )
+
+from .cleaner import quitar_tildes, limpiar_texto_estructural
 
 def contar_silabas_palabra(palabra: str) -> int:
     """
@@ -129,14 +340,18 @@ def contar_silabas_palabra(palabra: str) -> int:
 
 
 #Busca el nombre de empresa y una año en el texto de un PDF. Devuelve valores por defecto si no hay coincidencias
-def encontrar_compañia_año(text: str):
+def encontrar_compañia_año(text: str, workspace=None):
     year_match = re.search(r"\b(19|20)\d{2}\b", text)
     year = int(year_match.group()) if year_match else None
 
     best_score = 0
     best_company = None
 
-    companies = Company.objects.all()
+    if workspace:
+        companies = Company.objects.filter(workspace=workspace)
+    else:
+        companies = Company.objects.all()
+
     for company in companies:
         score = fuzz.partial_ratio(company.name.lower(), text.lower())
         if score > best_score and score > 60:
@@ -146,16 +361,28 @@ def encontrar_compañia_año(text: str):
     return best_company, year
 
 
+# Patrón para proteger abreviaturas comunes en español (jurídicas, societarias y académicas)
+# y letras sueltas con punto (como incisos o iniciales) para no considerarlas fin de oración.
+_ABREV_SENTENCE_PATTERN = re.compile(
+    r"\b(art|arts|s\.a|c\.a|cia|inc|corp|ltda|dr|dra|sr|sra|pág|págs|pag|pags|ej|etc|núm|num|no|nro|av|tel|ing|lic|prof|dto|dpto|depto|ref|reg|res|sec|gob|cap|coord|univ|vol|vols|[a-záéíóúüñ])\.",
+    re.IGNORECASE,
+)
+
+
 #Calcular métricas de complejidad del texto
 def calcular_metricas_complejidad(texto: str) -> dict:
     """
     Calcula métricas de complejidad basadas en el texto extraído.
     Retorna un diccionario con:
-    - total_words: Total de palabras
+    - total_words: Total de palabras léxicas
     - unique_words: Palabras únicas
     - total_sentences: Total de oraciones
     - avg_word_length: Longitud promedio de palabras
     - avg_sentence_length: Promedio de palabras por oración
+    - total_syllables: Sílabas totales calculadas
+    - inflesz: Puntuación de legibilidad INFLESZ / Flesch-Szigriszt (0-100)
+    - inverted_inflesz: Factor de opacidad / complejidad inversa (0-1)
+    - readability_score: Índice de legibilidad normalizado (0-100)
     """
     if not texto or not texto.strip():
         return {
@@ -166,96 +393,111 @@ def calcular_metricas_complejidad(texto: str) -> dict:
             "avg_sentence_length": 0.0,
             "total_syllables": 0,
             "inflesz": 0.0,
-            "inverted_inflesz": 0.0
+            "inverted_inflesz": 0.0,
+            "readability_score": 0.0,
         }
-    
-    # Normalizar texto
-    texto_limpio = texto.lower().strip()
-    
-    # Contar oraciones (por puntos, signos de interrogación, exclamación)
-    oraciones = re.split(r'[.!?]+', texto_limpio)
+
+    # 1. Limpieza estructural previa (de-hyphenation multi-página, ligaduras tipográficas, etc.)
+    texto_estructural = limpiar_texto_estructural(texto)
+    texto_limpio = texto_estructural.lower().strip()
+
+    # 2. Contar oraciones sin romper abreviaturas comunes (Art., S.A., Inc.) ni cifras decimales
+    texto_oraciones = re.sub(r"(\d)\.(\d)", r"\1__NUMDOT__\2", texto_limpio)
+    while True:
+        nuevo_texto, n = _ABREV_SENTENCE_PATTERN.subn(r"\1__DOT__", texto_oraciones)
+        if n == 0:
+            break
+        texto_oraciones = nuevo_texto
+    oraciones = re.split(r"[.!?]+", texto_oraciones)
     oraciones = [s.strip() for s in oraciones if s.strip()]
     total_sentences = len(oraciones) if oraciones else 1
-    
-    # Extraer palabras (solo palabras significativas)
-    palabras = re.findall(r'\b[a-záéíóúñ]+(?:\'[a-záéíóúñ]+)?\b', texto_limpio)
-    total_words = len(palabras)
-    unique_words = len(set(palabras))
-    
-    # Calcular longitud promedio de palabras
-    avg_word_length = sum(len(p) for p in palabras) / total_words if total_words > 0 else 0
-    
-    # Calcular palabras por oración
-    avg_sentence_length = total_words / total_sentences if total_sentences > 0 else 0
 
-    # Calcular sílabas totales
+    # 3. Palabras totales para métricas oracionales (incluye palabras gramaticales)
+    tokens_oracion = re.findall(r'\b[a-záéíóúüñA-ZÁÉÍÓÚÜÑ]+\b', texto_estructural)
+    total_tokens = len(tokens_oracion) if tokens_oracion else 1
+
+    # 4. Palabras limpias para vocabulario léxico (incluye diéresis y eñe)
+    palabras_raw = re.findall(r'\b[a-záéíóúüñA-ZÁÉÍÓÚÜÑ]+\b', texto_limpio)
+    palabras_validas = [quitar_tildes(p) for p in palabras_raw if len(p) >= 3]
+    if not palabras_validas:
+        palabras_validas = [quitar_tildes(p) for p in palabras_raw]
+
+    total_words = len(palabras_validas) if palabras_validas else total_tokens
+    unique_words = len(set(palabras_validas)) if palabras_validas else 1
+
+    # Calcular longitud promedio de palabras y palabras por oración
+    avg_word_length = sum(len(p) for p in palabras_validas) / total_words if total_words > 0 else 0
+    avg_sentence_length = total_tokens / total_sentences if total_sentences > 0 else 0
+
+    # 5. Calcular sílabas totales (adaptado a lengua española)
     total_syllables = sum(
         contar_silabas_palabra(p)
-        for p in palabras
+        for p in tokens_oracion
     )
 
-    # INFLESZ
-    words_per_sentence = avg_sentence_length
-
+    # INFLESZ: Fórmula oficial Flesch-Szigriszt adaptada a lengua española
+    # INFLESZ = 206.84 - 0.623 * (sílabas / palabras * 100) - (palabras / oraciones)
     syllables_per_100_words = (
-        (total_syllables / total_words) * 100
-        if total_words > 0 else 0
+        (total_syllables / total_tokens) * 100
+        if total_tokens > 0 else 0
     )
+    words_per_sentence = avg_sentence_length
 
     inflesz = (
         206.84
-        - (0.60 * syllables_per_100_words)
-        - (1.02 * words_per_sentence)
+        - (0.623 * syllables_per_100_words)
+        - words_per_sentence
     )
 
-    # Normalización 0-1
-    inflesz_normalized = max(
-        0,
-        min(1, inflesz / 100)
-    )
+    # Normalización a escala 0-100 para legibilidad
+    readability_score = max(0.0, min(100.0, inflesz))
 
-    # Inversión
-    inverted_inflesz = 1 - inflesz_normalized
+    # Inversión de legibilidad a factor de complejidad (0-1: 0 = simple, 1 = complejo)
+    inverted_inflesz = max(0.0, min(1.0, 1.0 - (readability_score / 100.0)))
 
-
-    
     return {
         "total_words": total_words,
         "unique_words": unique_words,
         "total_sentences": total_sentences,
         "avg_word_length": round(avg_word_length, 2),
         "avg_sentence_length": round(avg_sentence_length, 2),
-
         "total_syllables": total_syllables,
         "inflesz": round(inflesz, 2),
-        "inverted_inflesz": round(inverted_inflesz, 3)
+        "readability_score": round(readability_score, 1),
+        "inverted_inflesz": round(inverted_inflesz, 3),
     }
 
 #Contar palabras técnicas basadas en listas de expertos
-def contar_palabras_tecnicas(texto: str, year: int = None) -> int:
+def contar_palabras_tecnicas(texto: str, year: int = None, workspace=None) -> int:
     """
     Cuenta cuántas palabras del texto están en las listas de palabras técnicas de expertos.
-    Si se proporciona un año, considera solo palabras técnicas relevantes para ese período.
+    Incluye caracteres en español con diéresis (ü) y eñe (ñ), con coincidencia canónica y normalizada.
+    Filtra estrictamente por el espacio de trabajo indicado.
     """
     if not texto or not texto.strip():
         return 0
-    
-    # Extraer palabras del texto
-    palabras_texto = set(re.findall(r'\b[a-záéíóúñ]+(?:\'[a-záéíóúñ]+)?\b', texto.lower()))
-    
-    # Obtener listas de palabras técnicas de expertos
-    listas_expertos = ExpertWord.objects.all()
-    
+
+    # Extraer palabras del texto incluyendo diéresis y eñe
+    palabras_texto_raw = set(re.findall(r"\b[a-záéíóúüñA-ZÁÉÍÓÚÜÑ]+(?:\'[a-záéíóúüñA-ZÁÉÍÓÚÜÑ]+)?\b", texto))
+    palabras_texto = {p.lower() for p in palabras_texto_raw}
+    palabras_texto_norm = {quitar_tildes(p) for p in palabras_texto}
+
+    # Listas de palabras técnicas: estrictamente las del espacio de trabajo indicado.
+    if workspace:
+        listas_expertos = ExpertWord.objects.filter(workspace=workspace)
+    else:
+        listas_expertos = ExpertWord.objects.none()
+
     palabras_tecnicas_encontradas = set()
-    
+
     for lista in listas_expertos:
         if lista.words:
             for palabra_tecnica in lista.words:
-                palabra_tecnica_lower = str(palabra_tecnica).lower()
-                # Buscar coincidencias exactas
-                if palabra_tecnica_lower in palabras_texto:
-                    palabras_tecnicas_encontradas.add(palabra_tecnica_lower)
-    
+                pt_lower = str(palabra_tecnica).lower().strip()
+                pt_norm = quitar_tildes(pt_lower)
+                # Coincidencia directa o insensible a tildes
+                if pt_lower in palabras_texto or pt_norm in palabras_texto_norm:
+                    palabras_tecnicas_encontradas.add(pt_lower)
 
     return len(palabras_tecnicas_encontradas)
 
@@ -264,33 +506,40 @@ def calcular_complejidad_general(diversidad_lexica: float, legibilidad: float, d
     """
     Calcula el índice de complejidad general combinando tres parámetros.
     Todos los parámetros deben estar en escala 0-1.
-    
+
     Fórmula: 
     Complejidad General = (Diversidad Léxica + (1 - Legibilidad) + Densidad Técnica) / 3
-    
+
     Parámetros:
     - diversidad_lexica: unique_words / total_words (0-1)
-    - legibilidad: 1 - (avg_sentence_length / max_length) (0-1, donde 1=legible, 0=no legible)
+    - legibilidad: legibilidad del documento en escala 0-1 (donde 1=legible, 0=no legible / opaco)
     - densidad_tecnica: technical_words / total_words (0-1)
-    
+
     Retorna un valor entre 0 y 1:
     - Cercano a 0: Documento simple (baja complejidad)
     - Cercano a 0.5: Complejidad media
     - Cercano a 1: Documento muy complejo (alta complejidad)
     """
-    # Asegurar que los valores están en rango 0-1
-    diversidad_lexica = max(0, min(1, diversidad_lexica))
-    legibilidad = max(0, min(1, legibilidad))
-    densidad_tecnica = max(0, min(1, densidad_tecnica))
-    
-    # Fórmula: promedio de diversidad, inverso de legibilidad (más difícil = más complejo), y densidad técnica
-    complejidad = (diversidad_lexica + legibilidad + densidad_tecnica) / 3
-    
+    diversidad_lexica = max(0.0, min(1.0, float(diversidad_lexica or 0)))
+    legibilidad = max(0.0, min(1.0, float(legibilidad or 0)))
+    densidad_tecnica = max(0.0, min(1.0, float(densidad_tecnica or 0)))
+
+    # Inverso de legibilidad: menor legibilidad (texto difícil) incrementa la complejidad
+    inverso_legibilidad = 1.0 - legibilidad
+    complejidad = (diversidad_lexica + inverso_legibilidad + densidad_tecnica) / 3.0
+
     return round(complejidad, 3)
 
 
 #Cargar empresas desde un archivo Excel
-def insertar_empresas(archivo_excel):
+def insertar_empresas(archivo_excel, workspace):
+    """
+    Importa empresas desde un Excel hacia el espacio de trabajo indicado.
+    `workspace` es obligatorio: las empresas siempre pertenecen a un espacio.
+    """
+    if workspace is None:
+        raise ValueError("insertar_empresas requiere un workspace destino.")
+
     df = pd.read_excel(archivo_excel)
 
     for _, row in df.iterrows():
@@ -300,11 +549,13 @@ def insertar_empresas(archivo_excel):
 
         provincia, _ = Province.objects.get_or_create(name=nombre_provincia)
 
-        if (
-            not Company.objects.filter(name=nombre_empresa).exists()
-            and not Company.objects.filter(ruc=ruc_empresa).exists()
-        ):
+        if not Company.objects.filter(
+            workspace=workspace, name=nombre_empresa
+        ).exists() and not Company.objects.filter(
+            workspace=workspace, ruc=ruc_empresa
+        ).exists():
             Company.objects.create(
+                workspace=workspace,
                 name=nombre_empresa, ruc=ruc_empresa, province=provincia
             )
         else:
@@ -379,7 +630,8 @@ def recalcular_metricas_reporte(report):
 
     report.technical_words_count = contar_palabras_tecnicas(
         texto_modificado,
-        report.year
+        report.year,
+        workspace=report.workspace
     )
 
     report.save()

@@ -1,28 +1,205 @@
-{% extends 'base.html' %}
-{% block title %}Iniciar sesión{% endblock %}
+{% extends 'base_auth.html' %}
+{% load i18n %}
+{% load widget_tweaks %}
+
+{% block title %}{% trans "Iniciar sesión" %} | ELI - Enterprise Lex Index{% endblock %}
 
 {% block content %}
-<div class="max-w-md mx-auto bg-white p-8 rounded-2xl shadow-lg mt-12">
-    <h2 class="text-3xl font-extrabold mb-6 text-center text-blue-700">Iniciar sesión</h2>
-    <form method="post" novalidate>
-        {% csrf_token %}
-        <input type="hidden" name="next" value="{{ request.GET.next }}">
-        
-        {% for field in form %}
-        <div class="mb-5">
-            <label for="{{ field.id_for_label }}" class="block text-gray-700 font-semibold mb-2">{{ field.label }}</label>
-            {{ field }}
-            {% if field.errors %}
-            <p class="text-red-600 mt-1 text-sm">{{ field.errors|striptags }}</p>
-            {% endif %}
+<main class="auth-shell">
+
+    <!-- ===================================================================== -->
+    <!-- OBSERVATORIO: identidad, declaración y garantías                      -->
+    <!-- ===================================================================== -->
+    <section class="auth-observatory">
+        <a href="{% url 'index' %}" class="auth-brand" title="{% trans 'Ir a inicio' %}">
+            <div class="relative shrink-0 flex items-center justify-center">
+                <svg class="h-8 w-8" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <linearGradient id="eliLogoAuthDesk" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stop-color="#1d4ed8"/>
+                            <stop offset="50%" stop-color="#2563eb"/>
+                            <stop offset="100%" stop-color="#38bdf8"/>
+                        </linearGradient>
+                    </defs>
+                    <rect width="36" height="36" rx="10" fill="url(#eliLogoAuthDesk)"/>
+                    <rect x="0.75" y="0.75" width="34.5" height="34.5" rx="9.25" stroke="white" stroke-opacity="0.3" stroke-width="1.5"/>
+                    <ellipse cx="18" cy="18" rx="13" ry="5.2" transform="rotate(-30 18 18)" stroke="#7dd3fc" stroke-opacity="0.8" stroke-width="1.2" stroke-dasharray="2.5 1.5"/>
+                    <text x="18" y="22" font-family="'IBM Plex Mono', ui-monospace, monospace" font-size="11" font-weight="900" letter-spacing="0.5" fill="#ffffff" text-anchor="middle">ELI</text>
+                    <rect x="13.5" y="25" width="9" height="1.6" rx="0.8" fill="#7dd3fc"/>
+                </svg>
+            </div>
+            <div>
+                <p>Enterprise Lex</p>
+                <small>INTELLIGENCE</small>
+            </div>
+        </a>
+
+        <div class="auth-orbit" aria-hidden="true">
+            <i></i><i></i><i></i>
+            <span>
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                </svg>
+            </span>
         </div>
-        {% endfor %}
-        
-        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 transition text-white font-bold py-3 rounded-lg mt-4 shadow-md">
-            Entrar
-        </button>
-    </form>
-</div>
+
+        <div class="auth-statement">
+            <p class="blue-eyebrow">{% trans "Inteligencia documental segura" %}</p>
+            <h1>{% trans "La evidencia habla." %}<br>{% trans "ELI la hace visible." %}</h1>
+            <p>{% trans "Analiza lenguaje, riesgo y complejidad jurídica dentro de un entorno diseñado para decisiones sensibles." %}</p>
+        </div>
+
+        <div class="auth-trust">
+            <span>
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                </svg>
+                {% trans "Cifrado de extremo a extremo" %}
+            </span>
+            <span>NODO SEGURO AG–04</span>
+        </div>
+    </section>
+
+    <!-- ===================================================================== -->
+    <!-- ACCESO: formulario                                                    -->
+    <!-- ===================================================================== -->
+    <section class="auth-access">
+        <div class="auth-mobile-brand">
+            <div class="relative shrink-0 flex items-center justify-center">
+                <svg class="h-8 w-8" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <linearGradient id="eliLogoAuthMob" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stop-color="#1d4ed8"/>
+                            <stop offset="50%" stop-color="#2563eb"/>
+                            <stop offset="100%" stop-color="#38bdf8"/>
+                        </linearGradient>
+                    </defs>
+                    <rect width="36" height="36" rx="10" fill="url(#eliLogoAuthMob)"/>
+                    <rect x="0.75" y="0.75" width="34.5" height="34.5" rx="9.25" stroke="white" stroke-opacity="0.3" stroke-width="1.5"/>
+                    <ellipse cx="18" cy="18" rx="13" ry="5.2" transform="rotate(-30 18 18)" stroke="#7dd3fc" stroke-opacity="0.8" stroke-width="1.2" stroke-dasharray="2.5 1.5"/>
+                    <text x="18" y="22" font-family="'IBM Plex Mono', ui-monospace, monospace" font-size="11" font-weight="900" letter-spacing="0.5" fill="#ffffff" text-anchor="middle">ELI</text>
+                    <rect x="13.5" y="25" width="9" height="1.6" rx="0.8" fill="#7dd3fc"/>
+                </svg>
+            </div>
+            <div>
+                <p>Enterprise Lex</p>
+                <small>INTELLIGENCE</small>
+            </div>
+        </div>
+
+        <div class="auth-form-wrap">
+            <div class="auth-form-heading">
+                <p class="eyebrow">{% trans "Acceso seguro" %}</p>
+                <h2>{% trans "Bienvenida de nuevo" %}</h2>
+                <p>{% trans "Ingresa tus credenciales para acceder al observatorio." %}</p>
+            </div>
+
+            <nav class="auth-tabs" aria-label="{% trans 'Tipo de acceso' %}">
+                <a href="{% url 'login' %}" class="active" aria-current="page">{% trans "Iniciar sesión" %}</a>
+                <a href="{% url 'register' %}">{% trans "Crear cuenta" %}</a>
+            </nav>
+
+            {% if form.non_field_errors %}
+            <div class="form-alert" role="alert">
+                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                </svg>
+                <div>
+                    <strong>{% trans "No pudimos iniciar tu sesión" %}</strong>
+                    <ul>
+                        {% for error in form.non_field_errors %}
+                        <li>{{ error }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+            {% endif %}
+
+            <form method="post" novalidate class="auth-form">
+                {% csrf_token %}
+                <input type="hidden" name="next" value="{{ request.GET.next }}">
+
+                <label for="{{ form.username.id_for_label }}">
+                    <span>{% trans "Nombre de usuario" %}</span>
+                    <div>
+                        <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
+                        </svg>
+                        {{ form.username|attr:"placeholder:Ingresa tu usuario"|attr:"autofocus:autofocus"|attr:"autocomplete:username"|add_class:"border-0 bg-transparent outline-none ring-0 focus:ring-0 focus:outline-none shadow-none" }}
+                    </div>
+                    {% if form.username.errors %}
+                    <p class="form-error">{{ form.username.errors|striptags }}</p>
+                    {% endif %}
+                </label>
+
+                <label for="{{ form.password.id_for_label }}">
+                    <span>{% trans "Contraseña" %}</span>
+                    <div>
+                        <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
+                        </svg>
+                        {{ form.password|attr:"placeholder:Ingresa tu contraseña"|attr:"autocomplete:current-password"|add_class:"border-0 bg-transparent outline-none ring-0 focus:ring-0 focus:outline-none shadow-none" }}
+                        <button type="button" onclick="togglePasswordVisibility('{{ form.password.id_for_label }}', this)"
+                                class="auth-eye" aria-label="{% trans 'Mostrar u ocultar contraseña' %}">
+                            <svg class="h-4 w-4 eye-icon" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                            </svg>
+                            <svg class="h-4 w-4 eye-off-icon hidden" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l18 18"></path>
+                            </svg>
+                        </button>
+                    </div>
+                    {% if form.password.errors %}
+                    <p class="form-error">{{ form.password.errors|striptags }}</p>
+                    {% endif %}
+                </label>
+
+                <div class="auth-options">
+                    <span class="auth-hint" title="{% trans 'Si olvidaste tu clave, solicita el restablecimiento a un administrador del sistema.' %}">
+                        {% trans "¿Olvidaste tu contraseña?" %}
+                    </span>
+                </div>
+
+                <button type="submit" class="auth-submit">
+                    <span>{% trans "Ingresar al observatorio" %}</span>
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"></path>
+                    </svg>
+                </button>
+            </form>
+
+            <p class="auth-switch">
+                {% trans "¿Aún no tienes una cuenta?" %}
+                <a href="{% url 'register' %}">{% trans "Solicitar acceso" %}</a>
+            </p>
+        </div>
+
+        <footer class="auth-footer">
+            <span>© 2026 Enterprise Lex Index</span>
+            <span class="font-mono">ELI v2.0</span>
+        </footer>
+    </section>
+
+</main>
+
+<script>
+function togglePasswordVisibility(fieldId, button) {
+    const input = document.getElementById(fieldId);
+    if (!input) return;
+
+    const eyeIcon = button.querySelector('.eye-icon');
+    const eyeOffIcon = button.querySelector('.eye-off-icon');
+
+    if (input.type === 'password') {
+        input.type = 'text';
+        if (eyeIcon) eyeIcon.classList.add('hidden');
+        if (eyeOffIcon) eyeOffIcon.classList.remove('hidden');
+    } else {
+        input.type = 'password';
+        if (eyeIcon) eyeIcon.classList.remove('hidden');
+        if (eyeOffIcon) eyeOffIcon.classList.add('hidden');
+    }
+}
+</script>
 {% endblock %}
-
-

@@ -1,159 +1,947 @@
-{% extends "base.html" %}
-{% load static %}
+{% extends 'base.html' %}
+{% load i18n %}
+{% load widget_tweaks %}
 
-{% block title %}Subir Reportes | ELI{% endblock %}
+{% block title %}{% trans "Ingesta documental" %} | ELI{% endblock %}
+{% block body_class %}eli-theme{% endblock %}
 
 {% block content %}
 
-{% load widget_tweaks %}
+<!-- Contenedor flotante de notificaciones interactivas (ELI Toasts) -->
+<div id="uploadToastContainer" class="fixed top-20 right-5 z-50 flex flex-col gap-2.5 max-w-sm pointer-events-none"></div>
 
+<!-- Overlay de carga interactivo con feedback visual de etapas -->
+<div id="loadingOverlay" class="fixed inset-0 z-50 hidden flex-col items-center justify-center bg-[rgba(5,14,28,0.82)] px-5 backdrop-blur-sm">
+    <div class="w-full max-w-md rounded-[20px] border border-[var(--line)] bg-[var(--surface)] p-7 text-center shadow-2xl">
+        <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[var(--blue-soft)] text-[var(--blue)]">
+            <svg class="h-6 w-6 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+            </svg>
+        </div>
 
-<!-- Overlay de carga oculto inicialmente -->
-<div id="loadingOverlay" class="fixed inset-0 bg-black bg-opacity-50 flex flex-col items-center justify-center text-white text-center text-xl font-bold z-50 hidden px-4">
-    <svg class="animate-spin h-12 w-12 mb-6 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
-    </svg>
-    <p class="max-w-md font-bold text-2xl">
-      Procesando reporte, por favor espere... <br> Si el archivo contiene una imagen esto puede tomar más de lo normal.
-    </p>
+        <h3 class="mt-5 text-base font-semibold tracking-tight text-[var(--ink)]" id="loadingStageTitle">
+            {% trans "Procesando documento..." %}
+        </h3>
+        <p class="mt-2 text-[11px] leading-5 text-[var(--muted)]" id="loadingStageDesc">
+            {% trans "Extrayendo texto digital, conteo léxico y calculando índices de complejidad." %}
+        </p>
+
+        <!-- Barra progresiva visual durante la extracción -->
+        <div class="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-[var(--line)]">
+            <div class="h-full rounded-full bg-[var(--blue)] animate-pulse w-3/4"></div>
+        </div>
+
+        <div class="mt-5 space-y-2 text-left">
+            <div class="flex items-center gap-2.5 rounded-xl border border-[var(--line)] bg-[var(--canvas)] p-2.5">
+                <span class="h-1.5 w-1.5 rounded-full bg-[var(--blue)]"></span>
+                <span class="text-[10px] font-semibold text-[var(--ink)]">1. {% trans "Lectura y extracción OCR" %}</span>
+            </div>
+            <div class="flex items-center gap-2.5 rounded-xl border border-[var(--line)] bg-[var(--canvas)] p-2.5">
+                <span class="h-1.5 w-1.5 rounded-full bg-[var(--blue)]"></span>
+                <span class="text-[10px] font-semibold text-[var(--ink)]">2. {% trans "Normalización de vocabulario" %}</span>
+            </div>
+            <div class="flex items-center gap-2.5 rounded-xl border border-[var(--line)] bg-[var(--canvas)] p-2.5">
+                <span class="h-1.5 w-1.5 rounded-full bg-[var(--blue)]"></span>
+                <span class="text-[10px] font-semibold text-[var(--ink)]">3. {% trans "Cálculo de asimetría y guardado" %}</span>
+            </div>
+        </div>
+
+        <span class="mt-5 inline-flex items-center rounded-full bg-[var(--blue-soft)] px-3 py-1.5 text-[9px] font-bold text-[var(--blue)]">
+            {% trans "Por favor, no cierres ni recargues la página" %}
+        </span>
+    </div>
 </div>
 
-
-<div class="container mx-auto px-6 max-w-3xl py-8">
-
-    <div class="mb-6">
-        <!-- !Panel de administración -->
-        <a href="{% url 'panel' %}"
-        class="inline-flex items-center gap-2 bg-gradient-to-r from-blue-400 to-blue-600 hover:from-blue-500 hover:to-blue-700 text-white font-medium py-2.5 px-6 rounded-xl shadow-md hover:shadow-lg transition-all duration-300 ease-in-out">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24"
-                stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                    d="M3 10h18M3 6h18M3 14h18M3 18h18"/>
-            </svg>
-            Panel de administración
-        </a>
-        <!-- !Todos los reportes -->
-        <a href="{% url 'reports' %}"
-        class="inline-flex items-center gap-2 bg-gradient-to-r from-purple-400 to-purple-600 hover:from-blue-500 hover:to-blue-700 text-white font-medium py-2.5 px-6 rounded-xl shadow-md hover:shadow-lg transition-all duration-300 ease-in-out">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24"
-                stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                    d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 0 1-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 0 1 1.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 0 0-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 0 1-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 0 0-3.375-3.375h-1.5a1.125 1.125 0 0 1-1.125-1.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H9.75" />
-            </svg>
-            Todos los Reportes
-        </a>
-    </div>
-
-    <h1 class="text-4xl font-extrabold mb-8 text-gray-900">Subida de Reportes</h1>
-
-    {% if messages %}
-    <div class="mb-8 space-y-3">
-        {% for message in messages %}
-        <div class="p-4 rounded-lg
-                    {% if message.tags == 'success' %}
-                        bg-green-50 text-green-800 border border-green-200
-                    {% elif message.tags == 'error' %}
-                        bg-red-50 text-red-800 border border-red-200
-                    {% else %}
-                        bg-gray-50 text-gray-700 border border-gray-200
-                    {% endif %}">
-            {{ message }}
+<!-- Modal interactivo de procesamiento por lotes ZIP -->
+<div id="zipBatchModal" class="fixed inset-0 z-50 hidden flex-col items-center justify-center bg-[rgba(5,14,28,0.82)] px-4 backdrop-blur-sm sm:px-6">
+    <div class="w-full max-w-lg rounded-[20px] border border-[var(--line)] bg-[var(--surface)] p-6 shadow-2xl sm:p-7">
+        <div class="flex items-center gap-4">
+            <div id="zipBatchSpinner" class="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#e8f8fb] text-[#0d7185] dark:bg-[#12313a] dark:text-[#63cede]">
+                <svg class="h-6 w-6 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+                </svg>
+            </div>
+            <div id="zipBatchSuccessIcon" class="hidden flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-500">
+                <svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"></path>
+                </svg>
+            </div>
+            <div class="min-w-0">
+                <h3 class="text-base font-semibold tracking-tight text-[var(--ink)]" id="zipBatchTitle">
+                    {% trans "Procesando Lote de Reportes..." %}
+                </h3>
+                <p class="mt-1 text-[11px] text-[var(--muted)]" id="zipBatchSubtitle">
+                    {% trans "Extrayendo y analizando documentos secuencialmente." %}
+                </p>
+            </div>
         </div>
-        {% endfor %}
+
+        <div class="my-5 rounded-xl border border-[var(--line)] bg-[var(--canvas)] p-3.5">
+            <div class="flex items-center justify-between text-[10px] font-semibold text-[var(--ink)]">
+                <span>{% trans "Progreso del lote" %}</span>
+                <span id="zipBatchProgressPercent" class="font-mono text-[var(--blue)]">0%</span>
+            </div>
+            <div class="mt-2.5 h-2 w-full overflow-hidden rounded-full bg-[var(--line)]">
+                <div id="zipBatchProgressBar" class="h-full rounded-full bg-[var(--blue)] transition-all duration-300" style="width: 0%;"></div>
+            </div>
+            <div class="mt-2 flex items-center justify-between gap-4 font-mono text-[9px] text-[var(--muted)]">
+                <span id="zipBatchCurrentFileName" class="truncate">{% trans "Iniciando lote..." %}</span>
+                <span id="zipBatchCountRatio" class="shrink-0 font-bold text-[var(--ink)]">0 / 0</span>
+            </div>
+        </div>
+
+        <div class="mb-5">
+            <p class="mb-2 text-[9px] font-bold uppercase tracking-[0.13em] text-[var(--muted)]">
+                {% trans "Documentos analizados" %}
+            </p>
+            <div id="zipBatchLogList" class="max-h-48 space-y-1 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--canvas)] p-3 text-[10px] font-medium">
+                <!-- Se insertan dinámicamente -->
+            </div>
+        </div>
+
+        <div id="zipBatchActions" class="hidden items-center justify-between gap-3 border-t border-[var(--line)] pt-4">
+            <button type="button" onclick="location.reload()" class="flex-1 rounded-[10px] border border-[var(--line)] bg-[var(--surface-hover)] px-4 py-2.5 text-[10px] font-bold text-[var(--muted)] transition hover:text-[var(--ink)]">
+                {% trans "Subir otro lote" %}
+            </button>
+            <a href="{% url 'reports' %}" class="flex-1 rounded-[10px] bg-[var(--blue)] px-4 py-2.5 text-center text-[10px] font-bold text-white transition hover:bg-[#1d54c9]">
+                {% trans "Ver Catálogo de Reportes" %}
+            </a>
+        </div>
+
+        <div id="zipBatchAlertWait" class="pt-3 text-center">
+            <span class="inline-flex items-center rounded-full bg-[var(--blue-soft)] px-3 py-1.5 text-[9px] font-bold text-[var(--blue)]">
+                {% trans "Por favor, no cierres esta pestaña hasta completar el lote" %}
+            </span>
+        </div>
     </div>
-    {% endif %}
+</div>
 
-    <!-- Formulario individual -->
-    <section class="bg-white p-8 rounded-3xl shadow-lg mb-10">
-        <h2 class="text-2xl font-semibold mb-6 text-gray-800 border-b pb-2">Subir Reporte Individual</h2>
-        <form method="post" enctype="multipart/form-data" novalidate>
-            {% csrf_token %}
+<div class="mx-auto max-w-[1440px] px-5 py-7 sm:px-7 lg:px-9">
 
-            {% if individual_form.non_field_errors %}
-                <div class="mb-4 text-red-600 text-sm">
-                    {{ individual_form.non_field_errors }}
+    <!-- Encabezado de página -->
+    <section>
+        <p class="eyebrow">{% trans "Ingesta documental" %}</p>
+
+        <div class="mt-3">
+            <h1 class="text-[clamp(1.9rem,3.4vw,2.9rem)] font-semibold leading-tight tracking-[-0.045em] text-[var(--ink)]">
+                {% trans "Subida y Procesamiento de Reportes" %}
+            </h1>
+        </div>
+
+        <p class="mt-3 max-w-[680px] text-xs sm:text-sm leading-6 text-[var(--muted)]">
+            {% trans "Añade documentos al corpus. ELI identificará la entidad, el periodo y el método de extracción más adecuado para cada archivo." %}
+        </p>
+    </section>
+
+    <!-- Disposición principal en 2 columnas estilo Figma idéntica en proporciones al Observatorio -->
+    <div class="mt-8 grid gap-6 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,.72fr)] lg:h-[530px] items-stretch">
+
+        <!-- Columna Izquierda: Zonas de Carga Duales en Paralelo -->
+        <div class="min-w-0 h-full">
+            <div class="grid gap-5 md:grid-cols-2 h-full min-w-0">
+
+                <!-- Zona 1: Documento Individual (PDF) -->
+                <div id="zonePdf" class="upload-zone active h-full min-w-0" onclick="switchUploadMode('pdf')" tabindex="0" role="button" aria-label="{% trans 'Subir documento individual en PDF' %}">
+                    <span class="upload-icon">
+                        <svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                        </svg>
+                    </span>
+
+                    <div id="pdfPrompt" class="flex flex-col items-center">
+                        <span class="mt-5 text-sm font-semibold text-[var(--ink)]">{% trans "Subir Reporte Individual (PDF)" %}</span>
+                        <span class="mt-2 max-w-[240px] text-center text-[10.5px] leading-relaxed text-[var(--muted)]">
+                            {% trans "Arrastra un PDF o selecciónalo desde tu equipo" %}
+                        </span>
+                        <button type="button" class="mt-5 inline-flex items-center rounded-xl bg-[var(--blue-soft)] px-3.5 py-2 text-[9.5px] font-bold text-[var(--blue)] transition hover:bg-[var(--blue)] hover:text-white pointer-events-none">
+                            {% trans "SELECCIONAR PDF" %}
+                        </button>
+                        <span class="mt-3.5 font-mono text-[8.5px] text-[var(--faint)]">{% trans "Máximo 100 MB · OCR automático" %}</span>
+                    </div>
+
+                    <div id="pdfPreview" class="file-preview mt-4 hidden">
+                        <div class="flex min-w-0 items-center gap-3">
+                            <span class="file-badge">PDF</span>
+                            <div class="min-w-0 text-left">
+                                <p id="pdfFileName" class="truncate text-xs font-semibold text-[var(--ink)]"></p>
+                                <p id="pdfFileSize" class="font-mono text-[9px] text-[var(--muted)]"></p>
+                            </div>
+                        </div>
+                        <button type="button" id="removePdfBtn" class="flex-none rounded-lg p-1.5 text-[var(--faint)] transition hover:bg-[var(--surface-hover)] hover:text-[#b34a2e]" title="{% trans 'Cambiar archivo' %}">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Zona 2: Procesamiento por Lote (ZIP) -->
+                <div id="zoneZip" class="upload-zone batch h-full min-w-0" onclick="switchUploadMode('zip')" tabindex="0" role="button" aria-label="{% trans 'Subir lote masivo de reportes en archivo ZIP' %}">
+                    <span class="upload-icon">
+                        <svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"></path>
+                        </svg>
+                    </span>
+
+                    <div id="zipPrompt" class="flex flex-col items-center">
+                        <span class="mt-5 text-sm font-semibold text-[var(--ink)]">{% trans "Subir Múltiples Reportes (Lote ZIP)" %}</span>
+                        <span class="mt-2 max-w-[240px] text-center text-[10.5px] leading-relaxed text-[var(--muted)]">
+                            {% trans "Carga un ZIP con varios reportes financieros" %}
+                        </span>
+                        <button type="button" class="mt-5 inline-flex items-center rounded-xl bg-[#e8f8fb] dark:bg-[#12313a] px-3.5 py-2 text-[9.5px] font-bold text-[#0d7185] dark:text-[#63cede] transition hover:bg-[#0d7185] hover:text-white pointer-events-none">
+                            {% trans "SELECCIONAR ZIP" %}
+                        </button>
+                        <span class="mt-3.5 font-mono text-[8.5px] text-[var(--faint)]">{% trans "Máximo 300 MB · Múltiples PDFs" %}</span>
+                    </div>
+
+                    <div id="zipPreview" class="file-preview mt-4 hidden">
+                        <div class="flex min-w-0 items-center gap-3">
+                            <span class="file-badge zip">ZIP</span>
+                            <div class="min-w-0 text-left">
+                                <p id="zipFileName" class="truncate text-xs font-semibold text-[var(--ink)]"></p>
+                                <p id="zipFileSize" class="font-mono text-[9px] text-[var(--muted)]"></p>
+                            </div>
+                        </div>
+                        <button type="button" id="removeZipBtn" class="flex-none rounded-lg p-1.5 text-[var(--faint)] transition hover:bg-[var(--surface-hover)] hover:text-[#b34a2e]" title="{% trans 'Cambiar archivo' %}">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Columna Derecha: Panel de Configuración del Protocolo -->
+        <aside class="surface-panel p-5 sm:p-6 flex flex-col justify-between h-full min-w-0 w-full">
+            <div class="flex items-center justify-between border-b border-[var(--line)] pb-3.5 min-w-0">
+                <div class="min-w-0">
+                    <p class="eyebrow">{% trans "Configuración de análisis" %}</p>
+                    <h2 class="mt-1 text-sm sm:text-base font-semibold tracking-tight text-[var(--ink)] truncate">
+                        {% trans "Protocolo de extracción" %}
+                    </h2>
+                </div>
+                <span id="activeModeBadge" class="rounded-full bg-[var(--blue-soft)] px-2.5 py-1 font-mono text-[9px] font-bold text-[var(--blue)] shrink-0 whitespace-nowrap ml-2">
+                    PDF INDIVIDUAL
+                </span>
+            </div>
+
+            <!-- Formulario 1: Individual (PDF) -->
+            <form method="post" enctype="multipart/form-data" id="individualUploadForm" novalidate class="upload-form-panel mt-4 space-y-3 min-h-0 flex-1 flex flex-col justify-between min-w-0">
+                {% csrf_token %}
+                <input type="file" name="file" id="id_file" accept=".pdf,application/pdf" class="hidden" required />
+
+                {% if individual_form.non_field_errors %}
+                    <div class="form-alert mb-2">
+                        {{ individual_form.non_field_errors }}
+                    </div>
+                {% endif %}
+
+                <div class="space-y-3 min-w-0">
+                    <label class="form-field block min-w-0" for="{{ individual_form.company.id_for_label }}">
+                        <span>{% trans "Entidad relacionada" %}</span>
+                        {% render_field individual_form.company class="eli-input" %}
+                        {% if individual_form.company.errors %}
+                            <p class="mt-1 text-[10px] font-semibold text-[#b34a2e] dark:text-[#ff9c76]">{{ individual_form.company.errors.0 }}</p>
+                        {% endif %}
+                    </label>
+
+                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 min-w-0">
+                        <label class="form-field block min-w-0" for="{{ individual_form.year.id_for_label }}">
+                            <span>{% trans "Año del reporte" %}</span>
+                            {% render_field individual_form.year class="eli-input" %}
+                            {% if individual_form.year.errors %}
+                                <p class="mt-1 text-[10px] font-semibold text-[#b34a2e] dark:text-[#ff9c76]">{{ individual_form.year.errors.0 }}</p>
+                            {% endif %}
+                        </label>
+
+                        <label class="form-field block min-w-0" for="{{ individual_form.name.id_for_label }}">
+                            <span>{% trans "Título (opcional)" %}</span>
+                            {% render_field individual_form.name class="eli-input" placeholder="Nombre descriptivo" %}
+                            {% if individual_form.name.errors %}
+                                <p class="mt-1 text-[10px] font-semibold text-[#b34a2e] dark:text-[#ff9c76]">{{ individual_form.name.errors.0 }}</p>
+                            {% endif %}
+                        </label>
+                    </div>
+
+                    <!-- Casilla de Sobrescritura -->
+                    <div class="checkbox-row">
+                        {% render_field individual_form.overwrite class="checkbox-input" %}
+                        <div class="min-w-0">
+                            <label for="{{ individual_form.overwrite.id_for_label }}" class="cursor-pointer text-[10px] font-bold text-[var(--ink)]">
+                                {% trans "Sobrescribir si ya existe" %}
+                            </label>
+                            <p class="mt-0.5 text-[9px] leading-4 text-[var(--muted)]">
+                                {% trans "Reemplaza el documento y recalcula las estadísticas si ya existe para la misma empresa y año." %}
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- Alerta de duplicado previo al envío -->
+                    <div id="duplicateWarningAlert" class="notice hidden min-w-0 py-2.5 px-3">
+                        <span class="notice-icon shrink-0">
+                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                            </svg>
+                        </span>
+                        <div class="flex-1 min-w-0">
+                            <p class="text-[10px] font-bold" id="duplicateWarningTitle">{% trans "Reporte ya registrado" %}</p>
+                            <p id="duplicateWarningText" class="mt-0.5 text-[9.5px] leading-relaxed break-words">
+                                {% trans "Ya existe un reporte registrado para esta empresa y año. Activa la casilla de sobrescritura para reemplazarlo." %}
+                            </p>
+                        </div>
+                    </div>
+
+                    {% if individual_form.file.errors %}
+                        <p class="text-[10px] font-semibold text-[#b34a2e] dark:text-[#ff9c76]">{{ individual_form.file.errors.0 }}</p>
+                    {% endif %}
+                </div>
+
+                <button type="submit" name="upload_individual" id="submitPdfBtn" class="action-submit w-full mt-auto">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path>
+                    </svg>
+                    <span>{% trans "Subir y procesar PDF" %}</span>
+                </button>
+            </form>
+
+            <!-- Formulario 2: Lote Masivo (ZIP) -->
+            <form method="post" enctype="multipart/form-data" id="zipUploadForm" novalidate class="upload-form-panel mt-4 space-y-3 min-h-0 flex-1 flex flex-col justify-between min-w-0 hidden">
+                {% csrf_token %}
+                <input type="file" name="zip_file" id="id_zip_file" accept=".zip,application/zip" class="hidden" required />
+
+                {% if zip_form.non_field_errors %}
+                    <div class="form-alert mb-2">
+                        {{ zip_form.non_field_errors }}
+                    </div>
+                {% endif %}
+
+                <div class="space-y-3 min-w-0">
+                    <label class="form-field block min-w-0" for="{{ zip_form.company.id_for_label }}">
+                        <span>{% trans "Asignar empresa a todo el lote" %} <em class="font-normal normal-case text-[var(--faint)]">({% trans "opcional" %})</em></span>
+                        {% render_field zip_form.company class="eli-input" %}
+                        <p class="mt-1 text-[8.5px] text-[var(--muted)]">
+                            {% trans "Si lo dejas en detección automática, el OCR inferirá la empresa de cada documento." %}
+                        </p>
+                        {% if zip_form.company.errors %}
+                            <p class="mt-1 text-[10px] font-semibold text-[#b34a2e] dark:text-[#ff9c76]">{{ zip_form.company.errors.0 }}</p>
+                        {% endif %}
+                    </label>
+
+                    <!-- Casilla de Sobrescritura en ZIP -->
+                    <div class="checkbox-row">
+                        {% render_field zip_form.overwrite class="checkbox-input" %}
+                        <div class="min-w-0">
+                            <label for="{{ zip_form.overwrite.id_for_label }}" class="cursor-pointer text-[10px] font-bold text-[var(--ink)]">
+                                {% trans "Sobrescribir si ya existe" %}
+                            </label>
+                            <p class="mt-0.5 text-[9px] leading-4 text-[var(--muted)]">
+                                {% trans "Si está desmarcado, los archivos ya registrados serán omitidos sin duplicarse." %}
+                            </p>
+                        </div>
+                    </div>
+
+                    {% if zip_form.zip_file.errors %}
+                        <p class="text-[10px] font-semibold text-[#b34a2e] dark:text-[#ff9c76]">{{ zip_form.zip_file.errors.0 }}</p>
+                    {% endif %}
+                </div>
+
+                <button type="submit" name="upload_zip" id="submitZipBtn" class="action-submit w-full mt-auto !bg-[#0d7185] hover:!bg-[#095767]">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"></path>
+                    </svg>
+                    <span>{% trans "Subir y procesar lote ZIP" %}</span>
+                </button>
+            </form>
+        </aside>
+
+    </div>
+
+    <!-- Sección Inferior: Cola de Actividad Reciente del Espacio (Estilo Figma) -->
+    <section class="surface-panel mt-6">
+        <div class="panel-heading">
+            <div>
+                <p class="eyebrow">{% trans "Cola de procesamiento" %}</p>
+                <h2>{% trans "Actividad reciente del espacio" %}</h2>
+            </div>
+            <span class="rounded-full bg-[var(--blue-soft)] px-3 py-1 font-mono text-[9px] font-bold text-[var(--blue)]">
+                {% blocktrans count counter=recent_reports|length %}{{ counter }} REPORTE RECIENTE{% plural %}{{ counter }} REPORTES RECIENTES{% endblocktrans %}
+            </span>
+        </div>
+
+        <div class="divide-y divide-[var(--line)]">
+            {% if recent_reports %}
+                {% for rep in recent_reports %}
+                <a href="{% url 'report_count' rep.id %}" class="flex items-center gap-4 px-5 py-4 sm:px-6 hover:bg-[var(--surface-hover)] transition group">
+                    <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-[var(--blue-soft)] text-[var(--blue)] shrink-0 transition group-hover:scale-105">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                        </svg>
+                    </span>
+
+                    <div class="min-w-0 flex-1">
+                        <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                            <div class="min-w-0 flex items-center gap-2">
+                                <p class="truncate text-xs font-semibold text-[var(--ink)] group-hover:text-[var(--blue)] transition">
+                                    {{ rep.report_name }}
+                                </p>
+                                <span class="hidden sm:inline font-mono text-[10px] text-[var(--muted)]">· {{ rep.company_name }} ({{ rep.year }})</span>
+                            </div>
+                            <div class="flex items-center gap-2 shrink-0">
+                                <span class="font-mono text-[10px] font-bold text-[var(--ink)]">{{ rep.progress_pct }}%</span>
+                            </div>
+                        </div>
+
+                        <p class="mt-1 text-[9.5px] text-[var(--muted)]">
+                            <span class="sm:hidden font-semibold text-[var(--ink)]">{{ rep.company_name }} ({{ rep.year }}) · </span>
+                            {{ rep.detail_text }}
+                        </p>
+
+                        <!-- Barra progresiva de extracción de texto (Estilo Figma) -->
+                        <div class="mt-2.5 h-1.5 w-full overflow-hidden rounded-full bg-[var(--line)]">
+                            <div class="h-full rounded-full transition-all duration-500 bg-[var(--blue)] {% if rep.progress_pct < 100 %}animate-pulse{% endif %}" style="width: {{ rep.progress_pct }}%;"></div>
+                        </div>
+                    </div>
+
+                    <span class="justify-self-end text-[var(--faint)] transition group-hover:translate-x-1 group-hover:text-[var(--blue)] shrink-0 ml-1">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"></path>
+                        </svg>
+                    </span>
+                </a>
+                {% endfor %}
+            {% else %}
+                <div class="p-8 text-center">
+                    <div class="mx-auto flex h-11 w-11 items-center justify-center rounded-2xl bg-[var(--blue-soft)] text-[var(--blue)]">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                        </svg>
+                    </div>
+                    <p class="mt-3 text-xs font-semibold text-[var(--ink)]">{% trans "Aún no hay reportes en este espacio de trabajo" %}</p>
+                    <p class="mt-1 text-[10.5px] text-[var(--muted)]">{% trans "Sube un archivo PDF o un archivo comprimido ZIP arriba para iniciar la auditoría." %}</p>
                 </div>
             {% endif %}
-
-            <div class="mb-5">
-                <label for="{{ individual_form.company.id_for_label }}" class="block mb-2 font-medium text-gray-700">Empresa</label>
-                {{ individual_form.company|add_class:"w-full rounded-md border border-gray-300 px-3 py-2 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500" }}
-                {% if individual_form.company.errors %}
-                    <p class="text-red-600 text-sm mt-1">{{ individual_form.company.errors.0 }}</p>
-                {% endif %}
-            </div>
-
-            <div class="mb-5">
-                <label for="{{ individual_form.year.id_for_label }}" class="block mb-2 font-medium text-gray-700">Año</label>
-                {{ individual_form.year|add_class:"w-full rounded-md border border-gray-300 px-3 py-2 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500" }}
-                {% if individual_form.year.errors %}
-                    <p class="text-red-600 text-sm mt-1">{{ individual_form.year.errors.0 }}</p>
-                {% endif %}
-            </div>
-
-            <div class="mb-5">
-                <label for="{{ individual_form.name.id_for_label }}" class="block mb-2 font-medium text-gray-700">Nombre</label>
-                {{ individual_form.name|add_class:"w-full rounded-md border border-gray-300 px-3 py-2 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500" }}
-                {% if individual_form.name.errors %}
-                    <p class="text-red-600 text-sm mt-1">{{ individual_form.name.errors.0 }}</p>
-                {% endif %}
-            </div>
-
-            <div class="mb-6">
-                <label for="{{ individual_form.file.id_for_label }}" class="block mb-2 font-medium text-gray-700">Archivo</label>
-                {{ individual_form.file|add_class:"w-full rounded-md border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" }}
-                {% if individual_form.file.errors %}
-                    <p class="text-red-600 text-sm mt-1">{{ individual_form.file.errors.0 }}</p>
-                {% endif %}
-            </div>
-
-            <button type="submit" name="upload_individual"
-                class="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg shadow-md transition">
-                Subir Individual
-            </button>
-        </form>
+        </div>
     </section>
 
-
-    <!-- Formulario ZIP -->
-    <section class="bg-white p-8 rounded-3xl shadow-lg">
-        <h2 class="text-2xl font-semibold mb-6 text-gray-800 border-b pb-2">Subir Múltiples Reportes (ZIP)</h2>
-        <form method="post" enctype="multipart/form-data" novalidate>
-            {% csrf_token %}
-
-            <div class="mb-5 block min-w-full">
-                <label for="{{ zip_form.company.id_for_label }}" class="block mb-2 font-medium text-gray-700">Empresa</label>
-                {{ zip_form.company }}
-            </div>
-            <div class="mb-6">
-                <label for="zip_file" class="block mb-2 font-medium text-gray-700">Archivo ZIP</label>
-                <input type="file" name="zip_file" id="zip_file" accept=".zip"
-                    class="w-full rounded-md border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500" />
-            </div>
-
-            <button type="submit" name="upload_zip"
-                class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 rounded-lg shadow-md transition">
-                Subir ZIP
-            </button>
-        </form>
-    </section>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
+// Notificaciones flotantes integradas (Toast ELI)
+function showUploadToast(message, type = 'warning') {
+    const container = document.getElementById('uploadToastContainer');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = `eli-toast pointer-events-auto flex items-start gap-3 px-4 py-3.5 rounded-xl border text-xs font-semibold shadow-xl transition-all duration-300 transform translate-y-2 opacity-0 ${
+        type === 'error'
+            ? 'bg-red-50 border-red-200 text-red-900 dark:bg-red-950/70 dark:border-red-900/60 dark:text-red-200'
+            : type === 'success'
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-900 dark:bg-emerald-950/70 dark:border-emerald-900/60 dark:text-emerald-200'
+            : 'bg-amber-50 border-amber-200 text-amber-900 dark:bg-amber-950/70 dark:border-amber-900/60 dark:text-amber-200'
+    }`;
+
+    const iconSvg = type === 'error'
+        ? '<svg class="w-4 h-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>'
+        : type === 'success'
+        ? '<svg class="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>'
+        : '<svg class="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>';
+
+    toast.innerHTML = `
+        ${iconSvg}
+        <div class="flex-1 leading-relaxed">${message}</div>
+        <button type="button" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition p-0.5 rounded-lg shrink-0" aria-label="{% trans 'Cerrar' %}">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+    `;
+
+    const closeBtn = toast.querySelector('button');
+    closeBtn.addEventListener('click', () => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(-6px)';
+        setTimeout(() => toast.remove(), 250);
+    });
+
+    container.appendChild(toast);
+
+    requestAnimationFrame(() => {
+        toast.classList.remove('translate-y-2', 'opacity-0');
+    });
+
+    setTimeout(() => {
+        if (toast.parentNode) {
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateY(-6px)';
+            setTimeout(() => toast.remove(), 250);
+        }
+    }, 4500);
+}
+
+// Selector reactivo de modo de carga
+function switchUploadMode(mode) {
+    const isPdf = mode === 'pdf';
+    const formPdf = document.getElementById('individualUploadForm');
+    const formZip = document.getElementById('zipUploadForm');
+    const zonePdf = document.getElementById('zonePdf');
+    const zoneZip = document.getElementById('zoneZip');
+    const badge = document.getElementById('activeModeBadge');
+
+    if (formPdf && formZip) {
+        formPdf.classList.toggle('hidden', !isPdf);
+        formZip.classList.toggle('hidden', isPdf);
+    }
+
+    if (zonePdf && zoneZip) {
+        zonePdf.classList.toggle('active', isPdf);
+        zoneZip.classList.toggle('active', !isPdf);
+    }
+
+    if (badge) {
+        if (isPdf) {
+            badge.textContent = "PDF INDIVIDUAL";
+            badge.className = "rounded-full bg-[var(--blue-soft)] px-2.5 py-1 font-mono text-[9px] font-bold text-[var(--blue)] shrink-0 whitespace-nowrap ml-2";
+        } else {
+            badge.textContent = "LOTE ZIP MASIVO";
+            badge.className = "rounded-full bg-[#e8f8fb] dark:bg-[#12313a] px-2.5 py-1 font-mono text-[9px] font-bold text-[#0d7185] dark:text-[#63cede] shrink-0 whitespace-nowrap ml-2";
+        }
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     const loadingOverlay = document.getElementById('loadingOverlay');
 
-    // Selecciona ambos formularios de subida (individual y ZIP)
-    const forms = document.querySelectorAll('form[method="post"][enctype="multipart/form-data"]');
+    function formatBytes(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
 
-    forms.forEach(form => {
-        form.addEventListener('submit', () => {
+    // --- Manejo Drag & Drop PDF Individual ---
+    const zonePdf = document.getElementById('zonePdf');
+    const pdfInput = document.getElementById('id_file');
+    const pdfPrompt = document.getElementById('pdfPrompt');
+    const pdfPreview = document.getElementById('pdfPreview');
+    const pdfFileName = document.getElementById('pdfFileName');
+    const pdfFileSize = document.getElementById('pdfFileSize');
+    const removePdfBtn = document.getElementById('removePdfBtn');
+
+    function handlePdfFile(file) {
+        if (!file) return;
+        if (!file.name.toLowerCase().endsWith('.pdf')) {
+            showUploadToast("{% trans 'Por favor, selecciona un archivo en formato .PDF válido.' %}", "warning");
+            pdfInput.value = '';
+            return;
+        }
+        if (file.size > 100 * 1024 * 1024) {
+            showUploadToast("{% trans 'El archivo supera el límite máximo de 100 MB.' %}", "error");
+            pdfInput.value = '';
+            return;
+        }
+        pdfFileName.textContent = file.name;
+        pdfFileSize.textContent = formatBytes(file.size);
+        pdfPrompt.classList.add('hidden');
+        pdfPreview.classList.remove('hidden');
+        switchUploadMode('pdf');
+    }
+
+    if (zonePdf && pdfInput) {
+        zonePdf.addEventListener('click', (e) => {
+            if (e.target !== removePdfBtn && !removePdfBtn.contains(e.target)) {
+                switchUploadMode('pdf');
+                // Si el preview está oculto, abrir explorador
+                if (pdfPreview.classList.contains('hidden')) {
+                    pdfInput.click();
+                }
+            }
+        });
+
+        pdfInput.addEventListener('change', () => {
+            if (pdfInput.files && pdfInput.files[0]) {
+                handlePdfFile(pdfInput.files[0]);
+            }
+        });
+
+        removePdfBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            pdfInput.value = '';
+            pdfPreview.classList.add('hidden');
+            pdfPrompt.classList.remove('hidden');
+        });
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            zonePdf.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                zonePdf.classList.add('is-dragging');
+            }, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            zonePdf.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                zonePdf.classList.remove('is-dragging');
+            }, false);
+        });
+
+        zonePdf.addEventListener('drop', (e) => {
+            const files = e.dataTransfer.files;
+            if (files && files.length > 0) {
+                pdfInput.files = files;
+                handlePdfFile(files[0]);
+            }
+        });
+    }
+
+    // --- Manejo Drag & Drop ZIP ---
+    const zoneZip = document.getElementById('zoneZip');
+    const zipInput = document.getElementById('id_zip_file');
+    const zipPrompt = document.getElementById('zipPrompt');
+    const zipPreview = document.getElementById('zipPreview');
+    const zipFileName = document.getElementById('zipFileName');
+    const zipFileSize = document.getElementById('zipFileSize');
+    const removeZipBtn = document.getElementById('removeZipBtn');
+
+    function handleZipFile(file) {
+        if (!file) return;
+        if (!file.name.toLowerCase().endsWith('.zip')) {
+            showUploadToast("{% trans 'Por favor, selecciona un archivo comprimido en formato .ZIP.' %}", "warning");
+            zipInput.value = '';
+            return;
+        }
+        if (file.size > 300 * 1024 * 1024) {
+            showUploadToast("{% trans 'El archivo ZIP supera el límite máximo de 300 MB.' %}", "error");
+            zipInput.value = '';
+            return;
+        }
+        zipFileName.textContent = file.name;
+        zipFileSize.textContent = formatBytes(file.size);
+        zipPrompt.classList.add('hidden');
+        zipPreview.classList.remove('hidden');
+        switchUploadMode('zip');
+    }
+
+    if (zoneZip && zipInput) {
+        zoneZip.addEventListener('click', (e) => {
+            if (e.target !== removeZipBtn && !removeZipBtn.contains(e.target)) {
+                switchUploadMode('zip');
+                // Si el preview está oculto, abrir explorador
+                if (zipPreview.classList.contains('hidden')) {
+                    zipInput.click();
+                }
+            }
+        });
+
+        zipInput.addEventListener('change', () => {
+            if (zipInput.files && zipInput.files[0]) {
+                handleZipFile(zipInput.files[0]);
+            }
+        });
+
+        removeZipBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            zipInput.value = '';
+            zipPreview.classList.add('hidden');
+            zipPrompt.classList.remove('hidden');
+        });
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            zoneZip.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                zoneZip.classList.add('is-dragging');
+            }, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            zoneZip.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                zoneZip.classList.remove('is-dragging');
+            }, false);
+        });
+
+        zoneZip.addEventListener('drop', (e) => {
+            const files = e.dataTransfer.files;
+            if (files && files.length > 0) {
+                zipInput.files = files;
+                handleZipFile(files[0]);
+            }
+        });
+    }
+
+    // --- Verificación interactiva de reportes duplicados (empresa + año) ---
+    const companySelect = document.getElementById('id_company');
+    const yearSelect = document.getElementById('id_year');
+    const overwriteCheckbox = document.getElementById('id_overwrite');
+    const duplicateAlert = document.getElementById('duplicateWarningAlert');
+    const duplicateWarningText = document.getElementById('duplicateWarningText');
+
+    async function checkDuplicateReport() {
+        const companyId = companySelect ? companySelect.value : '';
+        const year = yearSelect ? yearSelect.value : '';
+
+        if (!companyId || !year) {
+            if (duplicateAlert) duplicateAlert.classList.add('hidden');
+            return;
+        }
+
+        try {
+            const url = `{% url 'check_report_duplicate' %}?company_id=${encodeURIComponent(companyId)}&year=${encodeURIComponent(year)}`;
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.exists) {
+                if (duplicateWarningText) {
+                    duplicateWarningText.innerHTML = `{% trans "Ya existe un reporte registrado para" %} <strong>${data.company_name}</strong> {% trans "en el año" %} <strong>${data.year}</strong> (<em>"${data.report_name}"</em>). {% trans "Para reemplazarlo y recalcular los conteos, debes activar la casilla" %} <strong>"{% trans 'Sobrescribir si ya existe este reporte' %}"</strong>.`;
+                }
+                if (duplicateAlert) {
+                    duplicateAlert.classList.remove('hidden');
+                    if (overwriteCheckbox && overwriteCheckbox.checked) {
+                        duplicateAlert.classList.add('opacity-75');
+                    } else {
+                        duplicateAlert.classList.remove('opacity-75');
+                    }
+                }
+            } else {
+                if (duplicateAlert) duplicateAlert.classList.add('hidden');
+            }
+        } catch (err) {
+            console.error("Error al consultar duplicados:", err);
+        }
+    }
+
+    if (companySelect) companySelect.addEventListener('change', checkDuplicateReport);
+    if (yearSelect) yearSelect.addEventListener('change', checkDuplicateReport);
+    if (overwriteCheckbox) {
+        overwriteCheckbox.addEventListener('change', () => {
+            if (duplicateAlert && !duplicateAlert.classList.contains('hidden')) {
+                if (overwriteCheckbox.checked) {
+                    duplicateAlert.classList.add('opacity-75');
+                } else {
+                    duplicateAlert.classList.remove('opacity-75');
+                }
+            }
+        });
+    }
+
+    // --- Control del Overlay y Envío del Formulario Individual ---
+    const individualForm = document.getElementById('individualUploadForm');
+    const zipForm = document.getElementById('zipUploadForm');
+
+    if (individualForm) {
+        individualForm.addEventListener('submit', (e) => {
+            if (duplicateAlert && !duplicateAlert.classList.contains('hidden') && overwriteCheckbox && !overwriteCheckbox.checked) {
+                e.preventDefault();
+                showUploadToast("{% trans 'Ya existe un reporte para esta empresa y año. Activa la casilla de sobrescritura para reemplazarlo.' %}", "warning");
+                overwriteCheckbox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                overwriteCheckbox.focus();
+                return;
+            }
+            const fileInput = document.getElementById('id_file');
+            if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+                e.preventDefault();
+                showUploadToast("{% trans 'Por favor, selecciona o arrastra un archivo PDF para continuar.' %}", "warning");
+                const zone = document.getElementById('zonePdf');
+                if (zone) {
+                    zone.classList.remove('zone-pulse-alert');
+                    void zone.offsetWidth;
+                    zone.classList.add('zone-pulse-alert');
+                    zone.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+                setTimeout(() => {
+                    fileInput.click();
+                }, 180);
+                return;
+            }
             loadingOverlay.classList.remove('hidden');
         });
-    });
+    }
+
+    function getCsrfToken() {
+        const input = document.querySelector('[name=csrfmiddlewaretoken]');
+        return input ? input.value : '';
+    }
+
+    // --- Procesamiento Lote ZIP por Etapas en Tiempo Real ---
+    if (zipForm) {
+        zipForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fileInput = document.getElementById('id_zip_file');
+            if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+                showUploadToast("{% trans 'Por favor, selecciona o arrastra un archivo comprimido .ZIP' %}", "warning");
+                const zone = document.getElementById('zoneZip');
+                if (zone) {
+                    zone.classList.remove('zone-pulse-alert');
+                    void zone.offsetWidth;
+                    zone.classList.add('zone-pulse-alert');
+                    zone.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+                setTimeout(() => {
+                    fileInput.click();
+                }, 180);
+                return;
+            }
+
+            const zipBatchModal = document.getElementById('zipBatchModal');
+            const zipBatchTitle = document.getElementById('zipBatchTitle');
+            const zipBatchSubtitle = document.getElementById('zipBatchSubtitle');
+            const zipBatchSpinner = document.getElementById('zipBatchSpinner');
+            const zipBatchSuccessIcon = document.getElementById('zipBatchSuccessIcon');
+            const zipBatchProgressBar = document.getElementById('zipBatchProgressBar');
+            const zipBatchProgressPercent = document.getElementById('zipBatchProgressPercent');
+            const zipBatchCurrentFileName = document.getElementById('zipBatchCurrentFileName');
+            const zipBatchCountRatio = document.getElementById('zipBatchCountRatio');
+            const zipBatchLogList = document.getElementById('zipBatchLogList');
+            const zipBatchActions = document.getElementById('zipBatchActions');
+            const zipBatchAlertWait = document.getElementById('zipBatchAlertWait');
+
+            // Resetear interfaz del modal
+            zipBatchModal.classList.remove('hidden');
+            zipBatchSpinner.classList.remove('hidden');
+            zipBatchSuccessIcon.classList.add('hidden');
+            zipBatchTitle.textContent = "{% trans 'Descomprimiendo y preparando lote...' %}";
+            zipBatchSubtitle.textContent = "{% trans 'Extrayendo archivos y detectando documentos PDF' %}";
+            zipBatchProgressBar.style.width = '0%';
+            zipBatchProgressPercent.textContent = '0%';
+            zipBatchCurrentFileName.textContent = "{% trans 'Subiendo archivo comprimido...' %}";
+            zipBatchCountRatio.textContent = '0 / 0';
+            zipBatchLogList.innerHTML = '';
+            zipBatchActions.classList.add('hidden');
+            zipBatchAlertWait.classList.remove('hidden');
+
+            const formData = new FormData(zipForm);
+
+            try {
+                // Etapa 1: Subir y descomprimir lote
+                const prepRes = await fetch("{% url 'prepare_zip_batch' %}", {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                });
+                const prepData = await prepRes.json();
+
+                if (!prepData.success) {
+                    showUploadToast(prepData.error || "{% trans 'Error al preparar el archivo ZIP' %}", "error");
+                    zipBatchModal.classList.add('hidden');
+                    return;
+                }
+
+                const batchId = prepData.batch_id;
+                const files = prepData.files;
+                const totalFiles = prepData.total_files;
+
+                zipBatchTitle.textContent = "{% trans 'Procesando Documentos del Lote' %}";
+                zipBatchSubtitle.textContent = `${totalFiles} {% trans 'documento(s) detectado(s)' %}`;
+                zipBatchCountRatio.textContent = `0 / ${totalFiles}`;
+
+                let processedCount = 0;
+                let successCount = 0;
+                let skippedCount = 0;
+                let errorCount = 0;
+
+                // Etapa 2: Procesar cada PDF secuencialmente
+                for (let i = 0; i < files.length; i++) {
+                    const relPath = files[i];
+                    const fname = relPath.split('/').pop();
+
+                    zipBatchCurrentFileName.textContent = `{% trans 'Analizando' %}: ${fname}`;
+
+                    try {
+                        const itemRes = await fetch("{% url 'process_zip_item' %}", {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-CSRFToken': getCsrfToken(),
+                                'X-Requested-With': 'XMLHttpRequest'
+                            },
+                            body: JSON.stringify({
+                                batch_id: batchId,
+                                file_path: relPath
+                            })
+                        });
+                        const itemData = await itemRes.json();
+
+                        processedCount++;
+                        const percent = Math.round((processedCount / totalFiles) * 100);
+                        zipBatchProgressBar.style.width = `${percent}%`;
+                        zipBatchProgressPercent.textContent = `${percent}%`;
+                        zipBatchCountRatio.textContent = `${processedCount} / ${totalFiles}`;
+
+                        const logItem = document.createElement('div');
+                        logItem.className = 'flex items-center justify-between gap-2 py-1.5';
+
+                        if (itemData.skipped) {
+                            skippedCount++;
+                            logItem.innerHTML = `
+                                <span class="truncate font-normal text-[var(--muted)]" title="${fname}">📄 ${fname}</span>
+                                <span class="log-badge muted text-[9px] px-2 py-0.5 rounded bg-[var(--line)] text-[var(--muted)]">{% trans "Omitido" %}</span>
+                            `;
+                        } else if (itemData.success) {
+                            successCount++;
+                            const wordsFormatted = itemData.total_words ? Number(itemData.total_words).toLocaleString() : '0';
+                            logItem.innerHTML = `
+                                <span class="truncate text-[var(--ink)]" title="${fname}">📄 ${fname}</span>
+                                <span class="log-badge success text-[9px] px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-500 font-mono font-bold">✓ ${wordsFormatted} {% trans 'palabras' %}</span>
+                            `;
+                        } else {
+                            errorCount++;
+                            logItem.innerHTML = `
+                                <span class="truncate text-[#b34a2e] dark:text-[#ff9c76]" title="${fname}">⚠️ ${fname}</span>
+                                <span class="log-badge danger text-[9px] px-2 py-0.5 rounded bg-red-500/10 text-red-500">{% trans "Error" %}</span>
+                            `;
+                        }
+                        zipBatchLogList.appendChild(logItem);
+                        zipBatchLogList.scrollTop = zipBatchLogList.scrollHeight;
+
+                    } catch (itemErr) {
+                        processedCount++;
+                        errorCount++;
+                        const logItem = document.createElement('div');
+                        logItem.className = 'flex items-center justify-between gap-2 py-1.5';
+                        logItem.innerHTML = `
+                            <span class="truncate text-[#b34a2e] dark:text-[#ff9c76]" title="${fname}">⚠️ ${fname}</span>
+                            <span class="log-badge danger text-[9px] px-2 py-0.5 rounded bg-red-500/10 text-red-500">{% trans "Error de red" %}</span>
+                        `;
+                        zipBatchLogList.appendChild(logItem);
+                    }
+                }
+
+                // Etapa 3: Finalizar y limpiar directorio temporal
+                await fetch("{% url 'finish_zip_batch' %}", {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': getCsrfToken(),
+                        'X-Requested-With': 'XMLHttpRequest'
+                    },
+                    body: JSON.stringify({ batch_id: batchId })
+                });
+
+                // Estado final completado
+                zipBatchSpinner.classList.add('hidden');
+                zipBatchSuccessIcon.classList.remove('hidden');
+                zipBatchTitle.textContent = "{% trans '¡Lote Procesado con Éxito!' %}";
+                zipBatchSubtitle.textContent = `${successCount} {% trans 'importados' %}, ${skippedCount} {% trans 'omitidos' %}, ${errorCount} {% trans 'errores' %}.`;
+                zipBatchCurrentFileName.textContent = "{% trans 'Análisis completado para todos los archivos.' %}";
+                zipBatchAlertWait.classList.add('hidden');
+                zipBatchActions.classList.remove('hidden');
+
+            } catch (err) {
+                console.error("Error en lote ZIP:", err);
+                showUploadToast("{% trans 'Ocurrió un error inesperado al procesar el archivo ZIP.' %}", "error");
+                zipBatchModal.classList.add('hidden');
+            }
+        });
+    }
 });
 </script>
 {% endblock %}
